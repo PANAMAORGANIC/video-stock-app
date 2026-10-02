@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Revisar clip · Clearview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { font-family: "JetBrains Mono", ui-monospace, monospace; }
+    body { background: #0f0f0f; color: #e5e5e5; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; }
+    .accent { background: #22c55e; }
+    .accent:hover { background: #16a34a; }
+    input:focus, textarea:focus { outline: 2px solid #22c55e; }
+    input[type=range] { accent-color: #22c55e; }
+    .scrub {
+      position: relative;
+      height: 36px;
+      background: #111;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      user-select: none;
+      touch-action: none;
+      cursor: pointer;
+    }
+    .scrub-sel {
+      position: absolute;
+      top: 8px;
+      height: 20px;
+      background: rgba(34, 197, 94, 0.32);
+      border-left: 2px solid #22c55e;
+      border-right: 2px solid #22c55e;
+      pointer-events: none;
+    }
+    .scrub-handle {
+      position: absolute;
+      top: 2px;
+      width: 10px;
+      height: 32px;
+      background: #22c55e;
+      border-radius: 2px;
+      cursor: ew-resize;
+      transform: translateX(-50%);
+      z-index: 2;
+    }
+    .scrub-handle:hover { background: #4ade80; }
+    .scrub-head {
+      position: absolute;
+      top: 0;
+      width: 2px;
+      height: 36px;
+      background: #f5f5f5;
+      transform: translateX(-50%);
+      z-index: 3;
+      pointer-events: none;
+    }
+    #playerHost, #playerHost iframe { width: 100%; height: 100%; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-4xl mx-auto px-4 py-8">
+
+    <header class="mb-8 flex items-center justify-between">
+      <div>
+        <a href="/" class="text-sm text-neutral-400 hover:text-green-400">← Library</a>
+        <h1 class="text-2xl font-bold mt-1">Revisar y Guardar Clip</h1>
+      </div>
+    </header>
+
+    <div class="card rounded-xl p-5 mb-6">
+      <h2 id="videoTitle" class="font-semibold text-lg mb-1">Cargando...</h2>
+      <p id="videoMeta" class="text-sm text-neutral-400"></p>
+      <a id="openOriginal" href="#" target="_blank" class="text-sm text-green-400 hover:underline mt-2 inline-block">
+        Abrir video original ↗
+      </a>
+    </div>
+
+    <div class="card rounded-xl overflow-hidden mb-6">
+      <div class="aspect-video bg-black" id="playerWrap">
+        <div id="playerHost" class="w-full h-full"></div>
+      </div>
+    </div>
+
+    <div class="card rounded-xl p-5 mb-6 space-y-5">
+      <p id="platformNote" class="hidden text-sm text-amber-400">
+        El recorte preciso (barra, teclado y vista previa) necesita YouTube o Dailymotion.
+      </p>
+
+      <div class="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p class="text-xs text-neutral-500 uppercase tracking-wide">Recorte</p>
+          <p id="selDur" class="text-xl font-semibold font-mono">0s</p>
+        </div>
+        <p id="durWarn" class="hidden text-sm text-red-400 max-w-sm">
+          Más de 60 s: Guardar Clip descarga y recodifica todo el tramo.
+        </p>
+      </div>
+
+      <div class="flex justify-between text-sm">
+        <span>Inicio: <strong id="startLabel" class="text-green-400 font-mono">0:00</strong></span>
+        <span>Fin: <strong id="endLabel" class="text-green-400 font-mono">0:00</strong></span>
+        <span class="text-neutral-500">Fuente: <strong id="srcDurLabel" class="font-mono">?</strong></span>
+      </div>
+
+      <div id="scrubBlock">
+        <div class="flex justify-between text-[10px] text-neutral-500 mb-1">
+          <span id="viewStartLbl">0:00</span>
+          <span id="zoomLbl"></span>
+          <span id="viewEndLbl">0:00</span>
+        </div>
+        <div id="scrub" class="scrub" aria-label="Barra de recorte">
+          <div id="scrubSel" class="scrub-sel"></div>
+          <div id="scrubIn" class="scrub-handle" title="Inicio"></div>
+          <div id="scrubOut" class="scrub-handle" title="Fin"></div>
+          <div id="scrubHead" class="scrub-head"></div>
+        </div>
+        <p id="keysHint" class="text-xs text-neutral-500 mt-2">
+          Espacio reproduce · ←/→ 1s (Shift 5s, Alt 0,2s) · I / O marcan inicio / fin · Z zoom al recorte · Shift+Z todo el vídeo
+        </p>
+      </div>
+
+      <div id="legacySliders" class="hidden space-y-3">
+        <div>
+          <label class="text-xs text-neutral-400">Ajustar inicio</label>
+          <input type="range" id="startSlider" min="0" max="600" step="0.5" value="0" class="w-full">
+        </div>
+        <div>
+          <label class="text-xs text-neutral-400">Ajustar fin</label>
+          <input type="range" id="endSlider" min="0" max="600" step="0.5" value="10" class="w-full">
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs text-neutral-400 block mb-1">Inicio (segundos)</label>
+          <input type="number" id="startInput" step="0.1" min="0" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2">
+        </div>
+        <div>
+          <label class="text-xs text-neutral-400 block mb-1">Fin (segundos)</label>
+          <input type="number" id="endInput" step="0.1" min="0" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2">
+        </div>
+      </div>
+
+      <button type="button" id="previewBtn" onclick="previewSelection()"
+              class="bg-neutral-800 hover:bg-neutral-700 px-4 py-2 rounded-lg text-sm">
+        Vista previa del recorte
+      </button>
+    </div>
+
+    <div class="card rounded-xl p-5 mb-6 space-y-4">
+      <div>
+        <label class="text-sm font-medium text-neutral-300 block mb-2">Nombre del clip (obligatorio)</label>
+        <input type="text" id="clipName"
+               placeholder="ej: mano_saco_compost_closeup"
+               class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-4 py-3 text-white">
+      </div>
+
+      <label class="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" id="removeSubs" checked class="w-4 h-4 accent-green-500">
+        <span class="text-sm">Eliminar subtítulos suaves (pistas de texto)</span>
+      </label>
+
+      <p class="text-xs text-neutral-500">
+        Nota: Los subtítulos quemados (hardcoded) y watermarks se tratarán en una fase posterior
+        (IA de inpainting o generación de versión limpia).
+      </p>
+    </div>
+
+    <div class="flex flex-wrap gap-3">
+      <button onclick="saveClip()" id="saveBtn"
+              class="accent text-black font-semibold px-6 py-3 rounded-lg transition disabled:opacity-50">
+        Guardar Clip
+      </button>
+      <button onclick="window.location.href='/'"
+              class="bg-neutral-800 hover:bg-neutral-700 px-5 py-3 rounded-lg text-sm">
+        Cancelar
+      </button>
+      <span id="saveStatus" class="text-sm text-neutral-400 self-center ml-2"></span>
+    </div>
+
+    <div id="resultBox" class="hidden mt-6 card rounded-xl p-5 border-green-800">
+      <p class="text-green-400 font-medium mb-2">✓ Clip guardado</p>
+      <p id="resultMsg" class="text-sm text-neutral-300"></p>
+      <div class="flex flex-wrap gap-3 mt-3">
+        <a id="resultLink" href="#" class="text-sm text-green-400 hover:underline" target="_blank">
+          Ver / descargar clip
+        </a>
+        <a id="openInEditor" href="/editor" class="text-sm bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 rounded">
+          Abrir en Edit →
+        </a>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const videoId = params.get("id") || "";
+    const title = params.get("title") || "Video";
+    let start = parseFloat(params.get("start") || "0");
+    let end = parseFloat(params.get("end") || "10");
+    const url = params.get("url") || `https://www.youtube.com/watch?v=${videoId}`;
+    const urlDur = parseFloat(params.get("duration") || "0");
+
+    function detectPlatform(u) {
+      const s = (u || "").toLowerCase();
+      if (s.includes("dailymotion") || s.includes("dai.ly")) return "dailymotion";
+      if (s.includes("tiktok.com")) return "tiktok";
+      if (s.includes("instagram.com")) return "instagram";
+      return "youtube";
+    }
+    const platform = detectPlatform(url);
+    const canSeek = platform === "youtube" || platform === "dailymotion";
+
+    const guessDur = Math.max(end + 120, 300);
+    let sourceDur = (isFinite(urlDur) && urlDur > 0) ? urlDur : guessDur;
+    let viewStart = 0;
+    let viewEnd = sourceDur;
+    let zoomed = false;
+    let playhead = start;
+    let previewing = false;
+    let drag = null;
+    let yt = null;
+    let dm = null;
+
+    document.getElementById("videoTitle").textContent = title;
+    document.getElementById("videoMeta").textContent = `${platform} · ID: ${videoId}`;
+    document.getElementById("openOriginal").href = url;
+    document.getElementById("openOriginal").textContent = `Abrir video original en ${platform} ↗`;
+
+    const wrap = document.getElementById("playerWrap");
+    const host = document.getElementById("playerHost");
+    const startSlider = document.getElementById("startSlider");
+    const endSlider = document.getElementById("endSlider");
+    const startInput = document.getElementById("startInput");
+    const endInput = document.getElementById("endInput");
+    const scrub = document.getElementById("scrub");
+    const scrubSel = document.getElementById("scrubSel");
+    const scrubIn = document.getElementById("scrubIn");
+    const scrubOut = document.getElementById("scrubOut");
+    const scrubHead = document.getElementById("scrubHead");
+
+    if (!canSeek) {
+      document.getElementById("platformNote").classList.remove("hidden");
+      document.getElementById("scrubBlock").classList.add("hidden");
+      document.getElementById("legacySliders").classList.remove("hidden");
+      document.getElementById("previewBtn").disabled = true;
+      document.getElementById("previewBtn").classList.add("opacity-50", "cursor-not-allowed");
+    }
+
+    if (platform === "youtube") {
+      window.onYouTubeIframeAPIReady = initYouTube;
+      const tag = document.createElement("script");
+      tag.src = "https://www.youtube.com/iframe_api";
+      document.head.appendChild(tag);
+      if (window.YT && YT.Player) initYouTube();
+    } else if (platform === "dailymotion") {
+      const tag = document.createElement("script");
+      tag.src = "https://geo.dailymotion.com/libs/player.js";
+      tag.onload = initDailymotion;
+      tag.onerror = function () { embedFallbackIframe(); };
+      document.head.appendChild(tag);
+    } else if (platform === "tiktok") {
+      host.innerHTML = `<iframe class="w-full h-full" src="https://www.tiktok.com/embed/v2/${videoId}"
+        frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+    } else {
+      wrap.innerHTML = `
+        <div class="w-full h-full flex flex-col items-center justify-center text-center px-6">
+          <p class="text-neutral-300 mb-3">Instagram no permite un reproductor embebido fiable.</p>
+          <a href="${url}" target="_blank" class="accent text-black font-semibold px-4 py-2 rounded-lg">Abrir en Instagram</a>
+          <p class="text-xs text-neutral-500 mt-3">Puedes recortar tiempos abajo y Guardar Clip (yt-dlp). A veces Instagram bloquea la descarga.</p>
+        </div>`;
+    }
+
+    function initYouTube() {
+      if (yt || !window.YT || !YT.Player) return;
+      yt = new YT.Player("playerHost", {
+        width: "100%",
+        height: "100%",
+        videoId: videoId,
+        playerVars: {
+          start: Math.max(0, Math.floor(start)),
+          rel: 0,
+          modestbranding: 1,
+          playsinline: 1,
+          enablejsapi: 1
+        },
+        events: {
+          onReady: function (e) {
+            function grab() {
+              try {
+                const d = e.target.getDuration();
+                if (d && d > 0) applySourceDuration(d);
+                else setTimeout(grab, 400);
+              } catch (err) {}
+            }
+            grab();
+            try { e.target.seekTo(start, true); } catch (err) {}
+          }
+        }
+      });
+    }
+
+    function initDailymotion() {
+      if (!window.dailymotion || !dailymotion.createPlayer) {
+        embedFallbackIframe();
+        return;
+      }
+      dailymotion.createPlayer("playerHost", {
+        video: videoId,
+        params: { startTime: Math.max(0, Math.floor(start)) }
+      }).then(function (player) {
+        dm = player;
+        function pullDur(state) {
+          const d = state && (state.videoDuration || state.duration);
+          if (d && d > 0) applySourceDuration(d);
+        }
+        player.getState().then(pullDur).catch(function () {});
+        const ev = dailymotion.events || {};
+        if (ev.VIDEO_DURATIONCHANGE) {
+          player.on(ev.VIDEO_DURATIONCHANGE, function (st) { pullDur(st); });
+        }
+        if (ev.VIDEO_TIMECHANGE) {
+          player.on(ev.VIDEO_TIMECHANGE, function (st) {
+            if (st && typeof st.videoTime === "number") playhead = st.videoTime;
+          });
+        }
+      }).catch(function () {
+        embedFallbackIframe();
+      });
+    }
+
+    function embedFallbackIframe() {
+      const src = platform === "dailymotion"
+        ? `https://www.dailymotion.com/embed/video/${videoId}?startTime=${Math.floor(start)}`
+        : `https://www.youtube.com/embed/${videoId}?start=${Math.floor(start)}`;
+      host.innerHTML = `<iframe class="w-full h-full" src="${src}" frameborder="0"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowfullscreen></iframe>`;
+    }
+
+    function applySourceDuration(d) {
+      d = Number(d);
+      if (!isFinite(d) || d <= 0.5) return;
+      sourceDur = d;
+      if (end > sourceDur) end = sourceDur;
+      if (start >= end) start = Math.max(0, end - 1);
+      if (!zoomed) {
+        viewStart = 0;
+        viewEnd = sourceDur;
+      } else {
+        zoomToSelection();
+      }
+      syncUi(false);
+    }
+
+    function formatTime(s) {
+      s = Math.max(0, Number(s) || 0);
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60);
+      return m + ":" + sec.toString().padStart(2, "0");
+    }
+
+    function clampStart(t) {
+      return Math.max(0, Math.min(t, end - 0.2));
+    }
+    function clampEnd(t) {
+      return Math.max(start + 0.2, Math.min(t, sourceDur));
+    }
+
+    function seekTo(t) {
+      t = Math.max(0, Math.min(sourceDur, t));
+      playhead = t;
+      try {
+        if (yt && typeof yt.seekTo === "function") yt.seekTo(t, true);
+        else if (dm && typeof dm.setTime === "function") dm.setTime(t);
+      } catch (err) {}
+      drawScrub();
+    }
+
+    function getCurrentTime() {
+      try {
+        if (yt && typeof yt.getCurrentTime === "function") return yt.getCurrentTime();
+      } catch (err) {}
+      return playhead;
+    }
+
+    function playVideo() {
+      try {
+        if (yt && typeof yt.playVideo === "function") yt.playVideo();
+        else if (dm && typeof dm.play === "function") dm.play();
+      } catch (err) {}
+    }
+    function pauseVideo() {
+      try {
+        if (yt && typeof yt.pauseVideo === "function") yt.pauseVideo();
+        else if (dm && typeof dm.pause === "function") dm.pause();
+      } catch (err) {}
+    }
+    function isPlaying() {
+      try {
+        if (yt && window.YT && typeof yt.getPlayerState === "function") {
+          return yt.getPlayerState() === YT.PlayerState.PLAYING;
+        }
+      } catch (err) {}
+      return false;
+    }
+
+    function previewSelection() {
+      if (!canSeek) return;
+      previewing = true;
+      seekTo(start);
+      playVideo();
+    }
+
+    function zoomToSelection() {
+      const len = Math.max(0.5, end - start);
+      const margin = Math.max(2, len * 0.15);
+      viewStart = Math.max(0, start - margin);
+      viewEnd = Math.min(sourceDur, end + margin);
+      if (viewEnd - viewStart < 1) viewEnd = Math.min(sourceDur, viewStart + 1);
+      zoomed = true;
+      drawScrub();
+    }
+    function resetZoom() {
+      viewStart = 0;
+      viewEnd = sourceDur;
+      zoomed = false;
+      drawScrub();
+    }
+
+    function tToX(t) {
+      const span = viewEnd - viewStart;
+      const rect = scrub.getBoundingClientRect();
+      const pct = span > 0 ? (t - viewStart) / span : 0;
+      return Math.max(0, Math.min(1, pct)) * rect.width;
+    }
+    function xToT(clientX) {
+      const rect = scrub.getBoundingClientRect();
+      const pct = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
+      return viewStart + Math.max(0, Math.min(1, pct)) * (viewEnd - viewStart);
+    }
+
+    function drawScrub() {
+      if (!canSeek || !scrub) return;
+      const w = scrub.getBoundingClientRect().width;
+      if (w < 2) return;
+      const xIn = tToX(start);
+      const xOut = tToX(end);
+      const xHead = tToX(playhead);
+      scrubSel.style.left = xIn + "px";
+      scrubSel.style.width = Math.max(2, xOut - xIn) + "px";
+      scrubIn.style.left = xIn + "px";
+      scrubOut.style.left = xOut + "px";
+      scrubHead.style.left = xHead + "px";
+      document.getElementById("viewStartLbl").textContent = formatTime(viewStart);
+      document.getElementById("viewEndLbl").textContent = formatTime(viewEnd);
+      document.getElementById("zoomLbl").textContent = zoomed ? "zoom al recorte" : "vídeo completo";
+    }
+
+    function syncUi(doSeek) {
+      if (end < start + 0.2) end = start + 0.2;
+      if (end > sourceDur) end = sourceDur;
+      if (start < 0) start = 0;
+      startInput.value = start.toFixed(1);
+      endInput.value = end.toFixed(1);
+      startSlider.max = sourceDur;
+      endSlider.max = sourceDur;
+      startSlider.value = start;
+      endSlider.value = end;
+      document.getElementById("startLabel").textContent = formatTime(start);
+      document.getElementById("endLabel").textContent = formatTime(end);
+      const span = end - start;
+      document.getElementById("selDur").textContent = span.toFixed(1) + "s";
+      document.getElementById("srcDurLabel").textContent = formatTime(sourceDur);
+      const warn = document.getElementById("durWarn");
+      if (span > 60) warn.classList.remove("hidden");
+      else warn.classList.add("hidden");
+      if (!zoomed) {
+        viewStart = 0;
+        viewEnd = sourceDur;
+      }
+      drawScrub();
+      if (doSeek && canSeek) seekTo(doSeek === "end" ? end : start);
+    }
+
+    function setStart(t, seek) {
+      start = clampStart(t);
+      syncUi(seek ? "start" : false);
+    }
+    function setEnd(t, seek) {
+      end = clampEnd(t);
+      syncUi(seek ? "end" : false);
+    }
+
+    startSlider.addEventListener("input", function () {
+      start = clampStart(parseFloat(startSlider.value) || 0);
+      syncUi(false);
+    });
+    endSlider.addEventListener("input", function () {
+      end = clampEnd(parseFloat(endSlider.value) || 0);
+      syncUi(false);
+    });
+    startInput.addEventListener("input", function () {
+      start = clampStart(parseFloat(startInput.value) || 0);
+      syncUi(false);
+    });
+    endInput.addEventListener("input", function () {
+      end = clampEnd(parseFloat(endInput.value) || 0);
+      syncUi(false);
+    });
+
+    scrub.addEventListener("pointerdown", function (e) {
+      if (!canSeek) return;
+      const t = xToT(e.clientX);
+      const x = e.clientX - scrub.getBoundingClientRect().left;
+      const inX = tToX(start);
+      const outX = tToX(end);
+      if (Math.abs(x - inX) <= 12) drag = "in";
+      else if (Math.abs(x - outX) <= 12) drag = "out";
+      else {
+        drag = null;
+        seekTo(t);
+        return;
+      }
+      scrub.setPointerCapture(e.pointerId);
+      if (drag === "in") setStart(t, true);
+      else setEnd(t, true);
+      e.preventDefault();
+    });
+    scrub.addEventListener("pointermove", function (e) {
+      if (!drag) return;
+      const t = xToT(e.clientX);
+      if (drag === "in") setStart(t, true);
+      else setEnd(t, true);
+    });
+    scrub.addEventListener("pointerup", function () { drag = null; });
+    scrub.addEventListener("pointercancel", function () { drag = null; });
+    window.addEventListener("resize", drawScrub);
+
+    function typingTarget(el) {
+      if (!el) return false;
+      const tag = (el.tagName || "").toLowerCase();
+      return tag === "input" || tag === "textarea" || el.isContentEditable;
+    }
+
+    document.addEventListener("keydown", function (e) {
+      if (typingTarget(e.target)) return;
+      if (!canSeek) return;
+      const key = e.key;
+      if (key === " " || e.code === "Space") {
+        e.preventDefault();
+        if (e.ctrlKey) {
+          setStart(playhead, false);
+          return;
+        }
+        if (e.altKey) {
+          setEnd(playhead, false);
+          return;
+        }
+        if (isPlaying()) pauseVideo();
+        else playVideo();
+        return;
+      }
+      if (key === "ArrowLeft" || key === "ArrowRight") {
+        e.preventDefault();
+        const dir = key === "ArrowLeft" ? -1 : 1;
+        let step = 1;
+        if (e.shiftKey) step = 5;
+        if (e.altKey) step = 0.2;
+        seekTo(playhead + dir * step);
+        return;
+      }
+      if (key === "i" || key === "I") {
+        e.preventDefault();
+        setStart(playhead, false);
+        return;
+      }
+      if (key === "o" || key === "O") {
+        e.preventDefault();
+        setEnd(playhead, false);
+        return;
+      }
+      if (key === "z" || key === "Z") {
+        e.preventDefault();
+        if (e.shiftKey) resetZoom();
+        else if (zoomed) resetZoom();
+        else zoomToSelection();
+      }
+    });
+
+    setInterval(function () {
+      if (!canSeek) return;
+      if (dm && typeof dm.getState === "function") {
+        dm.getState().then(function (st) {
+          if (st && typeof st.videoTime === "number") playhead = st.videoTime;
+          const d = st && st.videoDuration;
+          if (d && Math.abs(d - sourceDur) > 0.5) applySourceDuration(d);
+        }).catch(function () {});
+      } else {
+        const t = getCurrentTime();
+        if (typeof t === "number" && isFinite(t)) playhead = t;
+        try {
+          if (yt && typeof yt.getDuration === "function") {
+            const d = yt.getDuration();
+            if (d && Math.abs(d - sourceDur) > 0.5) applySourceDuration(d);
+          }
+        } catch (err) {}
+      }
+      if (previewing && playhead >= end - 0.05) {
+        pauseVideo();
+        previewing = false;
+        playhead = end;
+      }
+      drawScrub();
+    }, 120);
+
+    syncUi(false);
+
+    const cleanTitle = title.toLowerCase()
+      .replace(/[^\w\sáéíóúñ]/g, "")
+      .trim()
+      .split(/\s+/)
+      .slice(0, 5)
+      .join("_");
+    document.getElementById("clipName").value = `${cleanTitle}_${Math.floor(start)}s`;
+
+    async function saveClip() {
+      const name = document.getElementById("clipName").value.trim();
+      const removeSubs = document.getElementById("removeSubs").checked;
+      const btn = document.getElementById("saveBtn");
+      const status = document.getElementById("saveStatus");
+
+      if (!name) {
+        alert("Ponle un nombre al clip");
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = "Procesando...";
+      status.textContent = "Descargando y recortando (puede tardar 30-90 segundos)...";
+
+      try {
+        const res = await fetch("/api/save-clip", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_id: videoId,
+            video_url: url,
+            title: title,
+            start: start,
+            end: end,
+            custom_name: name,
+            remove_soft_subs: removeSubs
+          })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.detail || "Error al guardar");
+        }
+
+        status.textContent = "";
+        document.getElementById("resultBox").classList.remove("hidden");
+        document.getElementById("resultMsg").textContent = data.message;
+        document.getElementById("resultLink").href = data.path;
+        document.getElementById("resultLink").textContent = data.filename;
+
+        const editorParams = new URLSearchParams({
+          clip: data.path,
+          name: data.filename || name,
+          start: "0",
+          end: String((end - start).toFixed(1))
+        });
+        document.getElementById("openInEditor").href = `/editor?${editorParams.toString()}`;
+
+      } catch (err) {
+        status.textContent = "Error: " + err.message;
+        console.error(err);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Guardar Clip";
+      }
+    }
+  </script>
+</body>
+</html>

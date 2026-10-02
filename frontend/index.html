@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clearview · Library</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { font-family: "JetBrains Mono", ui-monospace, monospace; }
+    body { background: #0f0f0f; color: #e5e5e5; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; }
+    .accent { background: #22c55e; }
+    .accent:hover { background: #16a34a; }
+    input:focus, textarea:focus { outline: 2px solid #22c55e; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-8">
+    
+    <!-- Header -->
+    <header class="mb-10 flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">Clearview</h1>
+        <p class="text-neutral-400 mt-1">Library → Edit → Assemble</p>
+      </div>
+      <nav class="flex flex-wrap gap-2">
+        <a href="/editor" class="text-sm bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 px-4 py-2 rounded-lg transition whitespace-nowrap">
+          Edit
+        </a>
+        <a href="/create" class="text-sm bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded-lg transition whitespace-nowrap">
+          Assemble
+        </a>
+      </nav>
+    </header>
+
+    <!-- Search -->
+    <section class="card rounded-xl p-6 mb-8">
+      <label class="block text-sm font-medium text-neutral-300 mb-2">
+        Describe el footage que necesitas
+      </label>
+      <textarea id="query" rows="3" 
+        class="w-full bg-neutral-900 border border-neutral-700 rounded-lg p-4 text-white placeholder-neutral-500"
+        placeholder="Ej: mano abriendo saco de compost orgánico, close-up, luz natural, 6-10 segundos&#10;drone lento sobre plantación de plátanos al atardecer&#10;trabajador llenando tanque azul de residuos orgánicos"></textarea>
+
+      <label class="block text-sm font-medium text-neutral-300 mt-4 mb-2">
+        O pega el enlace de un video concreto
+      </label>
+      <div class="flex flex-wrap gap-2">
+        <input id="videoUrl" type="url"
+          class="flex-1 min-w-[16rem] bg-neutral-900 border border-neutral-700 rounded-lg px-4 py-2.5 text-white placeholder-neutral-500 text-sm"
+          placeholder="https://www.youtube.com/watch?v=…  ·  Instagram reel  ·  Dailymotion  ·  TikTok">
+        <button type="button" onclick="openVideoUrl()" id="urlBtn"
+          class="bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 font-medium px-4 py-2.5 rounded-lg text-sm whitespace-nowrap">
+          Abrir enlace
+        </button>
+      </div>
+      
+      <div class="flex flex-wrap gap-3 mt-4 items-center">
+        <button onclick="searchFootage()" id="searchBtn"
+          class="accent text-black font-semibold px-6 py-2.5 rounded-lg transition">
+          Buscar Footage
+        </button>
+        
+        <select id="platform" class="bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2.5 text-sm">
+          <option value="all">YouTube + Commons + Archive (gratis)</option>
+          <option value="youtube">YouTube</option>
+          <option value="commons">Wikimedia Commons</option>
+          <option value="archive">Internet Archive</option>
+          <option value="dailymotion">Dailymotion</option>
+          <option value="tiktok">TikTok (solo si lo pides)</option>
+          <option value="instagram">Instagram (solo si lo pides)</option>
+        </select>
+        <span id="status" class="text-sm text-neutral-400 ml-2"></span>
+      </div>
+      <p class="text-xs text-neutral-500 mt-3">TikTok e Instagram no entran en la búsqueda general: llenan de ruido. Pega la URL o elige esa plataforma.</p>
+
+      <div class="mt-4 flex flex-wrap items-center gap-2 text-sm">
+        <span id="igStatus" class="text-neutral-500">Instagram: sin conectar</span>
+        <button type="button" onclick="openIgModal()" class="bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 px-3 py-1.5 rounded-lg text-xs">
+          Conectar Instagram
+        </button>
+        <button type="button" id="igLogoutBtn" onclick="disconnectInstagram()" class="hidden text-xs text-red-300 hover:underline">
+          Desconectar
+        </button>
+      </div>
+    </section>
+
+    <div id="igModal" class="hidden fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+      <div class="card rounded-xl p-6 max-w-lg w-full max-h-[90vh] overflow-y-auto">
+        <div class="flex justify-between items-start mb-4">
+          <h2 class="text-lg font-semibold">Conectar tu cuenta de Instagram</h2>
+          <button onclick="closeIgModal()" class="text-neutral-500 hover:text-white">✕</button>
+        </div>
+        <p class="text-sm text-neutral-400 mb-4">
+          Instagram no deja buscar reels sin sesión. Conecta <strong class="text-neutral-200">tu</strong> cuenta
+          (uso personal). No se envía la contraseña a ningún servidor externo: las cookies se guardan solo en este PC
+          (<code class="text-neutral-300">storage/instagram_cookies.txt</code>).
+        </p>
+
+        <div class="space-y-4 text-sm">
+          <div>
+            <p class="font-medium text-neutral-200 mb-1">1. Pegar sessionid (lo más rápido)</p>
+            <ol class="list-decimal pl-5 text-neutral-400 space-y-1 mb-2">
+              <li>Abre <a class="text-green-400" href="https://www.instagram.com" target="_blank">instagram.com</a> e inicia sesión.</li>
+              <li>Pulsa F12 → Application (Aplicación) → Cookies → instagram.com</li>
+              <li>Copia el valor de <code class="text-neutral-300">sessionid</code> y pégalo aquí.</li>
+            </ol>
+            <input id="igSessionId" type="password" autocomplete="off" placeholder="sessionid"
+                   class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 mb-2">
+            <button onclick="connectIgSession()" class="accent text-black font-semibold px-4 py-2 rounded-lg">
+              Guardar sessionid
+            </button>
+          </div>
+
+          <div>
+            <p class="font-medium text-neutral-200 mb-1">2. Subir cookies.txt</p>
+            <p class="text-neutral-500 text-xs mb-2">Extensión “Get cookies.txt LOCALLY”, exporta instagram.com y súbelo.</p>
+            <input type="file" id="igCookieFile" accept=".txt,.cookies" class="text-xs mb-2">
+            <button onclick="uploadIgCookies()" class="bg-neutral-800 hover:bg-neutral-700 px-4 py-2 rounded-lg">
+              Subir archivo
+            </button>
+          </div>
+
+          <div>
+            <p class="font-medium text-neutral-200 mb-1">3. Importar del navegador</p>
+            <p class="text-neutral-500 text-xs mb-2">Cierra Chrome/Edge del todo y luego pulsa. En Windows a veces falla por el bloqueo de cookies.</p>
+            <div class="flex gap-2">
+              <button onclick="importIgBrowser('chrome')" class="bg-neutral-800 hover:bg-neutral-700 px-3 py-2 rounded-lg">Chrome</button>
+              <button onclick="importIgBrowser('edge')" class="bg-neutral-800 hover:bg-neutral-700 px-3 py-2 rounded-lg">Edge</button>
+            </div>
+          </div>
+        </div>
+        <p id="igModalMsg" class="text-xs text-neutral-400 mt-4"></p>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <section id="results" class="space-y-6"></section>
+
+  </div>
+
+  <script>
+    async function refreshIgStatus() {
+      try {
+        const res = await fetch('/api/instagram/status');
+        const data = await res.json();
+        const el = document.getElementById('igStatus');
+        const out = document.getElementById('igLogoutBtn');
+        if (data.connected) {
+          el.textContent = data.username
+            ? `Instagram: conectado como @${data.username}`
+            : 'Instagram: sesión guardada';
+          el.className = 'text-green-400';
+          out.classList.remove('hidden');
+        } else {
+          el.textContent = 'Instagram: sin conectar';
+          el.className = 'text-neutral-500';
+          out.classList.add('hidden');
+        }
+      } catch (_) {}
+    }
+
+    function openIgModal() {
+      document.getElementById('igModal').classList.remove('hidden');
+      document.getElementById('igModalMsg').textContent = '';
+    }
+    function closeIgModal() {
+      document.getElementById('igModal').classList.add('hidden');
+    }
+
+    async function connectIgSession() {
+      const sessionid = document.getElementById('igSessionId').value.trim();
+      const msg = document.getElementById('igModalMsg');
+      if (!sessionid) {
+        msg.textContent = 'Pega el sessionid.';
+        return;
+      }
+      try {
+        const res = await fetch('/api/instagram/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionid }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'No se pudo guardar');
+        msg.textContent = data.message || 'Guardado.';
+        document.getElementById('igSessionId').value = '';
+        await refreshIgStatus();
+        if (data.connected) setTimeout(closeIgModal, 700);
+      } catch (e) {
+        msg.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function uploadIgCookies() {
+      const input = document.getElementById('igCookieFile');
+      const msg = document.getElementById('igModalMsg');
+      if (!input.files || !input.files[0]) {
+        msg.textContent = 'Elige un archivo cookies.txt';
+        return;
+      }
+      const form = new FormData();
+      form.append('file', input.files[0]);
+      try {
+        const res = await fetch('/api/instagram/cookies', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'No se pudo subir');
+        msg.textContent = data.message || 'Cookies guardadas.';
+        await refreshIgStatus();
+        if (data.connected) setTimeout(closeIgModal, 700);
+      } catch (e) {
+        msg.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function importIgBrowser(browser) {
+      const msg = document.getElementById('igModalMsg');
+      msg.textContent = 'Leyendo cookies de ' + browser + '…';
+      try {
+        const res = await fetch('/api/instagram/from-browser', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ browser }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'No se pudo importar');
+        msg.textContent = data.message || 'Importado.';
+        await refreshIgStatus();
+        if (data.connected) setTimeout(closeIgModal, 700);
+      } catch (e) {
+        msg.textContent = 'Error: ' + e.message;
+      }
+    }
+
+    async function disconnectInstagram() {
+      if (!confirm('¿Quitar la sesión de Instagram de este PC?')) return;
+      await fetch('/api/instagram/session', { method: 'DELETE' });
+      await refreshIgStatus();
+    }
+
+    refreshIgStatus();
+
+    function looksLikeUrl(s) {
+      return /^https?:\/\/\S+/i.test((s || '').trim());
+    }
+
+    function platformFromUrl(url) {
+      const s = (url || '').toLowerCase();
+      if (s.includes('youtube.com') || s.includes('youtu.be')) return 'youtube';
+      if (s.includes('dailymotion.com') || s.includes('dai.ly')) return 'dailymotion';
+      if (s.includes('tiktok.com')) return 'tiktok';
+      if (s.includes('instagram.com')) return 'instagram';
+      return 'all';
+    }
+
+    async function openVideoUrl() {
+      const url = (document.getElementById('videoUrl').value.trim()
+        || document.getElementById('query').value.trim());
+      if (!looksLikeUrl(url)) {
+        alert('Pega un enlace que empiece por http:// o https://');
+        document.getElementById('videoUrl').focus();
+        return;
+      }
+      document.getElementById('videoUrl').value = url;
+      const plat = platformFromUrl(url);
+      const sel = document.getElementById('platform');
+      if (sel && plat !== 'all') sel.value = plat;
+      await runSearch(url, plat === 'all' ? 'all' : plat, true);
+    }
+
+    async function searchFootage() {
+      const urlField = document.getElementById('videoUrl').value.trim();
+      const text = document.getElementById('query').value.trim();
+      const platform = document.getElementById('platform').value;
+      if (!text && !urlField) {
+        alert('Escribe una descripción o pega el enlace del video');
+        return;
+      }
+      if (!text && looksLikeUrl(urlField)) return openVideoUrl();
+      if (looksLikeUrl(text)) return openVideoUrl();
+      await runSearch(text, platform, false);
+    }
+
+    async function runSearch(query, platform, fromUrl) {
+      const btn = document.getElementById(fromUrl ? 'urlBtn' : 'searchBtn');
+      const status = document.getElementById('status');
+      const resultsDiv = document.getElementById('results');
+
+      const names = {
+        all: 'YouTube, Commons y Archive',
+        youtube: 'YouTube',
+        commons: 'Wikimedia Commons',
+        archive: 'Internet Archive',
+        dailymotion: 'Dailymotion',
+        tiktok: 'TikTok',
+        instagram: 'Instagram',
+      };
+      const prevLabel = btn ? btn.textContent : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = fromUrl ? 'Abriendo…' : 'Buscando...';
+      }
+      status.textContent = fromUrl
+        ? 'Leyendo el enlace…'
+        : `Consultando ${names[platform] || platform}...`;
+      resultsDiv.innerHTML = '';
+
+      try {
+        const res = await fetch('/api/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, max_results: 6, platform })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          var detail = data.detail;
+          if (Array.isArray(detail)) detail = detail.map(function (x) { return x.msg || x; }).join(' ');
+          status.textContent = (data.results && data.results.length)
+            ? (data.results.length + ' videos encontrados · ' + (detail || 'aviso'))
+            : ('Aviso: ' + (detail || 'búsqueda incompleta'));
+          if (data.results && data.results.length) {
+            renderResults(data.results, query, detail, platform, data.match_label);
+          }
+          return;
+        }
+
+        const matchLine = data.match_label || (data.results.length ? (data.results.length + ' videos encontrados') : '');
+        status.textContent = fromUrl
+          ? (data.results.length ? 'Video encontrado' : 'No se pudo abrir ese enlace')
+          : (matchLine || 'Sin coincidencias');
+        if (data.warning && (!data.match_label || data.warning !== data.match_label)) {
+          status.textContent += ' · ' + data.warning;
+        }
+        renderResults(data.results, query, data.warning, platform, data.match_label);
+
+      } catch (err) {
+        status.textContent = 'Aviso: ' + (err.message || err);
+        console.error(err);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = fromUrl ? 'Abrir enlace' : (prevLabel || 'Buscar Footage');
+        }
+      }
+    }
+
+    function platformBadge(platform) {
+      const map = {
+        youtube: ['YouTube', 'bg-red-900/60 text-red-200'],
+        dailymotion: ['Dailymotion', 'bg-sky-900/60 text-sky-200'],
+        commons: ['Commons', 'bg-amber-900/60 text-amber-200'],
+        archive: ['Archive', 'bg-yellow-900/50 text-yellow-100'],
+        tiktok: ['TikTok', 'bg-neutral-800 text-neutral-200'],
+        instagram: ['Instagram', 'bg-pink-900/50 text-pink-200'],
+      };
+      const [label, cls] = map[platform] || [platform || 'Web', 'bg-neutral-800 text-neutral-300'];
+      return `<span class="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded ${cls}">${label}</span>`;
+    }
+
+    function renderResults(results, query, warning, platform, matchLabel) {
+      const container = document.getElementById('results');
+      
+      if (!results.length) {
+        const igHelp = (platform === 'instagram' || (warning && warning.toLowerCase().includes('instagram')))
+          ? `<div class="card rounded-xl p-5 mt-3 text-sm text-neutral-300 space-y-2">
+              <p class="font-medium text-pink-200">Por qué no sale Instagram</p>
+              <p>Instagram no deja buscar reels sin estar logueado. yt-dlp y los buscadores web suelen devolver 0 resultados.</p>
+              <ul class="list-disc pl-5 text-neutral-400 space-y-1">
+                <li>Copia el enlace del reel en Instagram y pégalo en la caja de búsqueda.</li>
+                <li>O exporta cookies (extensión “Get cookies.txt”) a <code class="text-neutral-300">storage/instagram_cookies.txt</code> y vuelve a buscar por texto.</li>
+              </ul>
+            </div>`
+          : '';
+        container.innerHTML = `<p class="text-neutral-400">No se encontraron resultados para "${query}".</p>${igHelp}`;
+        return;
+      }
+
+      const matchHtml = matchLabel
+        ? `<p class="text-sm text-green-400/90 mb-2">${matchLabel}</p>`
+        : '';
+      const warnHtml = warning && warning !== matchLabel
+        ? `<p class="text-sm text-pink-300/90 mb-4">${warning}</p>`
+        : '';
+      container.innerHTML = matchHtml + warnHtml + results.map(v => {
+        const thumb = v.thumbnail
+          ? `<img src="${v.thumbnail}" alt="" class="w-full h-40 md:h-full object-cover" onerror="this.parentElement.classList.add('bg-neutral-900'); this.remove();">`
+          : `<div class="w-full h-40 md:h-full bg-neutral-900 flex items-center justify-center text-xs text-neutral-500">${(v.platform || '').toUpperCase()}</div>`;
+        const safeUrl = (v.url || '').replace(/'/g, "%27");
+        const segs = (v.suggested_segments || []);
+        return `
+        <div class="card rounded-xl overflow-hidden">
+          <div class="flex flex-col md:flex-row">
+            <div class="md:w-72 flex-shrink-0 bg-neutral-900">
+              <a href="${v.url}" target="_blank" rel="noopener">${thumb}</a>
+            </div>
+            <div class="p-5 flex-1">
+              <div class="flex items-center gap-2 mb-2">${platformBadge(v.platform)}</div>
+              <h3 class="font-semibold text-lg leading-snug mb-1">
+                <a href="${v.url}" target="_blank" class="hover:text-green-400 transition">${v.title}</a>
+              </h3>
+              <p class="text-sm text-neutral-400 mb-3">
+                ${v.channel || ''} ${v.duration ? '· ' + v.duration : ''}
+              </p>
+
+              <div class="mb-3">
+                <button onclick="selectSegment('${escapeAttr(v.video_id)}', 0, 12, \`${escapeAttr(v.title)}\`, '${safeUrl}', ${durationSec(v)})"
+                  class="text-xs accent text-black font-medium px-3 py-1.5 rounded">
+                  Seleccionar / recortar
+                </button>
+                <a href="${v.url}" target="_blank" class="text-xs bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 rounded ml-2">
+                  Abrir original
+                </a>
+              </div>
+
+              ${segs.length ? `
+                <div class="space-y-2">
+                  <p class="text-xs uppercase tracking-wider text-neutral-500 font-medium">Segmentos sugeridos</p>
+                  ${segs.map(s => `
+                    <div class="bg-neutral-900/80 border border-neutral-700 rounded-lg p-3 flex justify-between items-start gap-3">
+                      <div class="flex-1 min-w-0">
+                        <div class="text-sm font-mono text-green-400 mb-1">
+                          ${formatTime(s.start)} → ${formatTime(s.end)}
+                          <span class="text-neutral-500 ml-2">${(s.confidence * 100).toFixed(0)}%</span>
+                        </div>
+                        <p class="text-sm text-neutral-300 line-clamp-2">${s.text}</p>
+                      </div>
+                      <div class="flex flex-col gap-1.5 flex-shrink-0">
+                        <a href="${v.url}" target="_blank"
+                           class="text-xs bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 rounded text-center">
+                          Ver
+                        </a>
+                        <button onclick="selectSegment('${escapeAttr(v.video_id)}', ${s.start}, ${s.end}, \`${escapeAttr(v.title)}\`, '${safeUrl}', ${durationSec(v)})"
+                          class="text-xs accent text-black font-medium px-3 py-1.5 rounded">
+                          Seleccionar
+                        </button>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : `
+                <p class="text-sm text-neutral-500 italic">
+                  ${v.platform === 'youtube' ? 'Sin transcript o sin coincidencias claras.' : 'Esta plataforma no usa transcript; recorta a mano en Revisar.'}
+                </p>
+              `}
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = Math.floor(seconds % 60);
+      return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function durationSec(v) {
+      const n = Number(v && v.duration_sec);
+      if (isFinite(n) && n > 0) return n;
+      const raw = String((v && v.duration) || "").trim();
+      if (!raw) return 0;
+      if (/^\d+(\.\d+)?$/.test(raw)) return parseFloat(raw);
+      const p = raw.split(":").map(Number);
+      if (!p.length || p.some(function (x) { return !isFinite(x); })) return 0;
+      if (p.length === 3) return p[0] * 3600 + p[1] * 60 + p[2];
+      if (p.length === 2) return p[0] * 60 + p[1];
+      return 0;
+    }
+
+    function escapeAttr(str) {
+      return str.replace(/`/g, '\\`').replace(/\$/g, '\\$');
+    }
+
+    function selectSegment(videoId, start, end, title, url, duration) {
+      const params = new URLSearchParams({
+        id: videoId,
+        start: start,
+        end: end,
+        title: title,
+        url: url || `https://www.youtube.com/watch?v=${videoId}`
+      });
+      const dur = Number(duration);
+      if (isFinite(dur) && dur > 0) params.set("duration", String(dur));
+      window.location.href = `/review?${params.toString()}`;
+    }
+
+    // Enter para buscar
+    document.getElementById('query').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        searchFootage();
+      }
+    });
+    document.getElementById('videoUrl').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        openVideoUrl();
+      }
+    });
+  </script>
+</body>
+</html>

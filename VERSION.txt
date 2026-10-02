@@ -1,0 +1,9 @@
+Clearview
+Cut (Premiere-style) + Color (Resolve-style) on a personal footage library.
+
+Library → Edit → Assemble
+
+Cut: JKL shuttle, I/O marks, C razor, Q/W ripple, M markers, extract I–O, ? shortcuts.
+Color: lift / gamma / gain / sat / temp / contrast. Looks: Neutral, Film, Night, Golden, Punch.
+Director understands Premiere/Resolve language and applies Clearview Cut + Color.
+Web footage from YouTube / Dailymotion is pulled into Clips, then edited.

@@ -1,0 +1,4538 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clearview · Assemble</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { font-family: "JetBrains Mono", ui-monospace, monospace; }
+    body { background: #0f0f0f; color: #e5e5e5; }
+    .card { background: #1a1a1a; border: 1px solid #2a2a2a; }
+    .accent { background: #22c55e; }
+    .accent:hover { background: #16a34a; }
+    .ghost {
+      background: #2a2a2a; border: 1px solid #3a3a3a; color: #e5e5e5;
+    }
+    .ghost:hover { background: #333; }
+    input:focus, textarea:focus, select:focus { outline: 2px solid #22c55e; }
+    .scene-active { outline: 2px solid #22c55e; }
+    .clip-row.active { outline: 1px solid #22c55e; }
+    #clipPreviewVideo { max-height: min(70vh, 520px); background: #000; width: 100%; }
+    #previewStage {
+      position: relative; height: 320px; overflow: hidden;
+      background: #000; display: flex; align-items: center; justify-content: center;
+    }
+    #previewStage .preview-el {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: contain;
+      background: transparent;
+    }
+    #previewStage .preview-el.is-front { opacity: 1; z-index: 1; pointer-events: auto; visibility: visible; }
+    #previewStage .preview-el.is-back { opacity: 0 !important; z-index: 0; pointer-events: none; visibility: hidden; }
+    #textOverlays {
+      position: absolute; inset: 0; z-index: 3; pointer-events: none;
+    }
+    .overlay-text {
+      position: absolute; color: #fff; font-weight: 700;
+      text-shadow: 0 2px 8px #000; left: 50%; transform: translateX(-50%);
+      pointer-events: none; text-align: center; max-width: 90%;
+    }
+    .tool {
+      background: #2a2a2a; border: 1px solid #3a3a3a; color: #e5e5e5;
+      border-radius: 8px; padding: 6px 10px; font-size: 11px; cursor: pointer;
+    }
+    .tool:hover { background: #333; }
+    .tool.on { outline: 1px solid #22c55e; }
+    .tool.danger { color: #f87171; }
+    .scene-select {
+      width: 100%; background: #111; border: 1px solid #333;
+      border-radius: 6px; padding: 4px 6px; font-size: 11px; color: #d4d4d4;
+    }
+    #sceneList {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+      max-height: calc(100vh - 7rem); overflow-y: auto; padding-bottom: 12px;
+    }
+    .scene-card { cursor: grab; overflow: hidden; }
+    .scene-card:active { cursor: grabbing; }
+    .scene-card.dragging { opacity: 0.45; }
+    .scene-card.drop-target, .scene-add.drop-target {
+      outline: 2px dashed #22c55e; outline-offset: -2px;
+    }
+    .scene-thumb { position: relative; height: 110px; background: #2a2a2a; }
+    .scene-thumb img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; display: block; }
+    .scene-thumb img.poster-miss { opacity: 0; }
+    .scene-dur {
+      position: absolute; left: 6px; bottom: 6px; background: rgba(0,0,0,.8);
+      color: #fff; font: 11px ui-monospace, Menlo, monospace; padding: 1px 6px; border-radius: 4px;
+    }
+    .scene-play {
+      position: absolute; right: 6px; bottom: 6px; width: 28px; height: 28px;
+      border: 0; border-radius: 999px; background: #22c55e; color: #052e16; cursor: pointer;
+    }
+    .scene-meta { padding: 8px 10px 10px; }
+    .scene-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .scene-sub { font-size: 10px; color: #a3a3a3; margin-top: 2px; }
+    .scene-add {
+      min-height: 168px; border: 1px dashed #3f3f3f; border-radius: 8px;
+      background: #141414; color: #737373; cursor: pointer;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    }
+    .scene-add:hover { border-color: #22c55e; color: #4ade80; }
+    #chatLog { height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+    .chat-bubble { max-width: 90%; border-radius: 12px; padding: 8px 10px; font-size: 13px; white-space: pre-wrap; }
+    .chat-bubble.user { align-self: flex-end; background: #166534; }
+    .chat-bubble.assistant { align-self: flex-start; background: #262626; }
+    .cap-style {
+      border: 1px solid #3a3a3a; background: #1f1f1f; color: #e5e5e5;
+      border-radius: 8px; padding: 6px 8px; font-size: 11px; cursor: pointer;
+    }
+    .cap-style.on { outline: 1px solid #22c55e; }
+    .cap-size {
+      min-width: 36px; border: 1px solid #3a3a3a; background: #1f1f1f; color: #e5e5e5;
+      border-radius: 8px; padding: 6px 8px; font-size: 11px; cursor: pointer; font-weight: 700;
+    }
+    .cap-size.on { outline: 1px solid #22c55e; background: #166534; }
+    .cap-bg {
+      border: 1px solid #3a3a3a; background: #1f1f1f; color: #e5e5e5;
+      border-radius: 8px; padding: 6px 8px; font-size: 11px; cursor: pointer;
+    }
+    .cap-bg.on { outline: 1px solid #22c55e; }
+    .cap-bg .swatch {
+      display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+      margin-right: 5px; vertical-align: -1px; border: 1px solid #555;
+    }
+    .cap-overlay {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      font-weight: 800; text-align: center; max-width: 92%;
+      pointer-events: none; padding: 4px 10px; border-radius: 8px;
+      z-index: 4; line-height: 1.2; white-space: normal;
+    }
+    #capCueList {
+      max-height: 170px; overflow-y: auto; margin-top: 8px;
+      font-size: 11px; border-top: 1px solid #2a2a2a; padding-top: 6px;
+    }
+    #capCueList .cue-row { display: flex; gap: 8px; padding: 3px 0; color: #d4d4d4; }
+    #capCueList .cue-row.on { color: #fff; background: #1f3d2a; }
+    #capCueList .cue-t { color: #4ade80; font-variant-numeric: tabular-nums; min-width: 44px; flex-shrink: 0; }
+    .cap-toggle {
+      min-width: 108px; font-weight: 700;
+    }
+    .cap-toggle.on { background: #166534; outline: 1px solid #22c55e; color: #fff; }
+    .cap-toggle.off { background: #2a2a2a; color: #a3a3a3; outline: 1px solid #525252; }
+    #captionsPanel.cap-off .cap-body { opacity: 0.4; }
+    .export-track { height: 10px; background: #2a2a2a; border-radius: 999px; overflow: hidden; }
+    .export-fill { height: 100%; width: 0%; background: #22c55e; border-radius: 999px; transition: width 0.25s ease; }
+    .stock-card { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid #2a2a2a; }
+    .stock-card img { width: 72px; height: 42px; object-fit: cover; border-radius: 4px; background: #111; flex-shrink: 0; }
+    .stock-card .stock-add { font-size: 10px; padding: 4px 6px; }
+    .rail-toggle {
+      width: 100%; text-align: left; background: transparent; border: 0;
+      color: #a3a3a3; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 2px 0 8px; cursor: pointer; font-weight: 600;
+    }
+    .rail-toggle:hover { color: #e5e5e5; }
+    #clipsBody { position: relative; min-height: 48px; }
+    #clipsBody.rail-drop { outline: 2px dashed #22c55e; outline-offset: 2px; border-radius: 8px; }
+    .rail-drop-hint {
+      display: none; position: absolute; inset: 0; z-index: 6;
+      background: rgba(0,0,0,.75); color: #4ade80;
+      align-items: center; justify-content: center; text-align: center;
+      font-size: 13px; font-weight: 600; border-radius: 8px; pointer-events: none;
+    }
+    #clipsBody.rail-drop .rail-drop-hint { display: flex; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <header class="h-12 flex items-center justify-between px-4 border-b border-neutral-800 bg-[#111] sticky top-0 z-40">
+    <div class="flex items-center gap-5 text-sm">
+      <a href="/" class="font-semibold text-white hover:text-green-400">Clearview</a>
+      <a href="/" class="text-neutral-400 hover:text-green-400">Library</a>
+      <a href="/editor" class="text-neutral-400 hover:text-green-400">Edit</a>
+      <span class="text-green-400 font-medium">Assemble</span>
+      <span id="saveState" class="text-[11px] text-neutral-500">Autoguardado</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button type="button" id="saveBtn" onclick="manualSave()" class="ghost text-sm font-semibold px-4 py-1.5 rounded-md">Guardar</button>
+      <button id="exportBtn" onclick="assembleVideo()" class="accent text-black font-semibold text-sm px-4 py-1.5 rounded-md">Exportar película</button>
+    </div>
+  </header>
+
+  <div class="max-w-7xl mx-auto px-4 py-6 grid lg:grid-cols-12 gap-5">
+    <aside id="createRail" class="lg:col-span-3 card rounded-xl p-4 h-fit">
+      <div id="webSection">
+        <button type="button" id="webToggle" class="rail-toggle" onclick="toggleRail('web')">
+          <span id="webChevron">▾</span> Web
+        </button>
+        <div id="webBody">
+          <p class="text-[10px] text-neutral-500 mb-2">Video de YouTube/Dailymotion o imágenes de la web. Lo que añadas va a Clips.</p>
+          <div class="flex gap-1 mb-2">
+            <button type="button" class="tool on" id="webKindVideo" onclick="setWebKind('video')">Video</button>
+            <button type="button" class="tool" id="webKindImage" onclick="setWebKind('images')">Imágenes</button>
+          </div>
+          <div class="flex gap-1 mb-2">
+            <input id="stockQuery" class="flex-1 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1.5 text-xs" placeholder="Ríos, humo, ciudad…" onkeydown="if(event.key==='Enter'){event.preventDefault();searchWeb()}">
+            <select id="stockPlat" class="scene-select max-w-[88px]">
+              <option value="youtube">YouTube</option>
+              <option value="dailymotion">Dailymotion</option>
+              <option value="all">Mix</option>
+            </select>
+          </div>
+          <button type="button" class="tool w-full mb-2" id="webSearchBtn" onclick="searchWeb()">Buscar video</button>
+          <p id="stockStatus" class="text-[10px] text-neutral-500 mb-2"></p>
+          <div id="stockHits" class="mb-3 max-h-56 overflow-y-auto"></div>
+        </div>
+      </div>
+      <div id="clipsSection" class="mt-2">
+        <button type="button" id="clipsToggle" class="rail-toggle" onclick="toggleRail('clips')">
+          <span id="clipsChevron">▾</span> Clips
+        </button>
+        <div id="clipsBody">
+          <div class="rail-drop-hint">Suelta imágenes o videos</div>
+          <p id="clipListHint" class="text-[11px] text-neutral-500 mb-2">Clic = añadir a escenas. Arrastra al tablero. ▶ ver. Suelta un JPG o MP4 aquí.</p>
+          <div class="flex flex-wrap gap-1.5 mb-2">
+            <button type="button" class="tool" onclick="loadSelectedAsScenes(true)">A escenas</button>
+            <button type="button" class="tool" onclick="toggleClipChecks(true)">Todos</button>
+            <button type="button" class="tool" onclick="toggleClipChecks(false)">Ninguno</button>
+          </div>
+          <button type="button" id="showHiddenBtn" class="hidden text-[11px] text-green-400 mb-2" onclick="showHiddenClips()"></button>
+          <div id="clipList" class="space-y-1 max-h-[70vh] overflow-y-auto text-sm"></div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="lg:col-span-6 space-y-4">
+      <section id="briefPanel" class="card rounded-xl p-5">
+        <h1 class="text-xl font-bold mb-1">Assemble</h1>
+        <p class="text-sm text-neutral-400 mb-4">Clearview: el Director arma el guion. Tú cortas, grades y exportas.</p>
+        <label class="text-xs text-neutral-500">¿Qué quieres crear?</label>
+        <textarea id="idea" rows="4" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg p-3 mt-1 mb-3" placeholder="Ej: Documental corto sobre el río..."></textarea>
+        <div class="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <label class="text-xs text-neutral-500">Formato</label>
+            <select id="fmt" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2">
+              <option value="documentary">Documental</option>
+              <option value="movie">Cortometraje</option>
+              <option value="explainer">Explicativo</option>
+              <option value="ad">Anuncio / promo</option>
+              <option value="youtube">YouTube</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs text-neutral-500">Duración objetivo</label>
+            <select id="dur" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2">
+              <option value="30">30 s</option>
+              <option value="60" selected>1 min</option>
+              <option value="90">1:30</option>
+              <option value="120">2 min</option>
+              <option value="180">3 min</option>
+            </select>
+          </div>
+        </div>
+        <button onclick="generatePlan()" id="planBtn" class="accent text-black font-semibold px-5 py-2 rounded-lg">Generar guion y montaje</button>
+        <span id="planStatus" class="text-sm text-neutral-400 ml-3"></span>
+      </section>
+
+      <section id="chatPanel" class="card rounded-xl p-4">
+        <button type="button" id="directorToggle" class="rail-toggle" onclick="toggleRail('director')">
+          <span id="directorChevron">▾</span> Director IA
+        </button>
+        <div id="directorBody">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <p class="text-[11px] text-neutral-500">Cut + Color: JKL, I/O, razor, grade. Habla en Premiere o Resolve y traduce a Clearview.</p>
+            <button type="button" onclick="showBrief(true)" class="text-[11px] text-neutral-400 hover:text-green-400 whitespace-nowrap">Cambiar idea</button>
+          </div>
+          <div class="flex flex-wrap gap-1.5 mb-2">
+            <button type="button" class="tool" onclick="chatChip('undo')">Deshacer</button>
+            <button type="button" class="tool" onclick="chatChip('Usa cada clip entero')">Clips enteros</button>
+            <button type="button" class="tool" onclick="chatChip('Genera captions estilo bold lower-third')">Captions Bold</button>
+            <button type="button" class="tool" onclick="chatChip('Pon voiceover en todas las escenas, estilo documentary, duck original')">VO todas</button>
+            <button type="button" class="tool" onclick="chatChip('Captions de la narración, posición abajo')">CC narración</button>
+            <button type="button" class="tool" onclick="chatChip('Busca footage web para esta idea y dime qué planos nos faltan')">Footage web</button>
+            <button type="button" class="tool" onclick="chatChip('Busca imágenes de esta idea')">Imágenes web</button>
+            <button type="button" class="tool" onclick="chatChip('Load all the clips selected into scenes')">Clips → escenas</button>
+            <button type="button" class="tool" onclick="chatChip('Look film en todas las escenas')">Look film</button>
+            <button type="button" class="tool" onclick="chatChip('Todas las escenas más cálidas')">Más cálido</button>
+            <button type="button" class="tool" onclick="chatChip('¿Qué le falta a este montaje? Pregúntame lo que necesites.')">¿Qué falta?</button>
+          </div>
+          <div id="chatLog" class="mb-3 pr-1"></div>
+          <form class="flex gap-2" onsubmit="sendDirectorChat(event)">
+            <input id="chatInput" autocomplete="off" class="flex-1 bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm" placeholder="Habla con el director: idea, footage web, ritmo…">
+            <button id="chatSend" type="submit" class="accent text-black font-semibold px-4 py-2 rounded-lg text-sm">Enviar</button>
+          </form>
+          <p id="chatStatus" class="text-[11px] text-neutral-500 mt-2"></p>
+        </div>
+      </section>
+
+      <section class="card rounded-xl overflow-hidden">
+        <div id="previewStage">
+          <video id="preview-video" class="preview-el is-front" playsinline muted></video>
+          <video id="preview-video-b" class="preview-el is-back" playsinline muted></video>
+          <div id="textOverlays"></div>
+          <div id="emptyPreview" class="absolute inset-0 flex items-center justify-center text-neutral-600 text-sm">Clic un clip a la izquierda o pulsa +</div>
+        </div>
+        <div class="flex items-center gap-3 px-4 py-2 border-t border-neutral-800 flex-wrap">
+          <button onclick="togglePlay()" id="playBtn" class="bg-neutral-800 w-9 h-8 rounded">▶</button>
+          <span id="timecode" class="font-mono text-xs text-neutral-400">0:00 / 0:00</span>
+          <input type="range" id="seekBar" min="0" max="1000" value="0" class="flex-1 accent-green-500">
+          <input type="file" id="musicFile" class="hidden" accept=".mp3,.wav,.m4a,.aac,audio/mpeg,audio/wav,audio/mp4,audio/aac" onchange="pickSequenceMusic(this)">
+          <button type="button" class="tool" onclick="$('musicFile').click()">Canción</button>
+          <input type="range" id="musicVol" min="0" max="100" value="25" class="w-20 accent-green-500" oninput="setMusicVolume(this.value/100, false)" onchange="setMusicVolume(this.value/100, true)">
+          <span id="musicVolLbl" class="text-[10px] text-neutral-400 w-8">25%</span>
+          <span id="musicNameLbl" class="text-[10px] text-neutral-500 max-w-[140px] truncate"></span>
+          <button type="button" class="tool danger hidden" id="musicClearBtn" onclick="clearSequenceMusic()">Quitar</button>
+        </div>
+      </section>
+
+      <section id="sceneTools" class="card rounded-xl p-3 hidden">
+        <div class="flex items-center justify-between gap-3 mb-2">
+          <span id="sceneToolsTitle" class="text-xs text-neutral-400">Escena</span>
+          <select id="sceneClipSelect" class="scene-select max-w-[220px]" onchange="assignClip(selectedSceneIndex, this.value)"></select>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <button class="tool" onclick="sceneSplit()">Split</button>
+          <button class="tool" onclick="sceneTrim('start')">Inicio</button>
+          <button class="tool" onclick="sceneTrim('end')">Final</button>
+          <button class="tool" onclick="sceneRotate(-90)">↺</button>
+          <button class="tool" onclick="sceneRotate(90)">↻</button>
+          <button class="tool" id="muteBtn" onclick="sceneMute()">Mute</button>
+          <button class="tool" onclick="sceneDup()">Duplicar</button>
+          <button class="tool danger" onclick="sceneDelete()">Quitar</button>
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+          <span class="text-[10px] text-neutral-500">Clip</span>
+          <input type="range" id="sceneSpeed" min="50" max="200" value="100" step="10" class="flex-1 accent-green-500" oninput="sceneSetSpeed(this.value/100)" onchange="lockSave()">
+          <span id="sceneSpeedLbl" class="text-[10px] w-8 text-neutral-400">1.0x</span>
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+          <span class="text-[10px] text-neutral-500">Duración</span>
+          <input type="range" id="sceneDur" min="4" max="80" value="20" step="1" class="flex-1 accent-green-500" oninput="sceneSetDuration(this.value/10, false)" onchange="sceneSetDuration(this.value/10, true)">
+          <span id="sceneDurLbl" class="text-[10px] w-10 text-neutral-400">2.0s</span>
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+          <span class="text-[10px] text-neutral-500">VO</span>
+          <input type="range" id="voRate" min="50" max="150" value="100" step="5" class="flex-1 accent-green-500" oninput="sceneSetVoRate(this.value/100, false)" onchange="sceneSetVoRate(this.value/100, true)">
+          <span id="voRateLbl" class="text-[10px] w-10 text-neutral-400">1.00x</span>
+        </div>
+        <textarea id="voScript" rows="7" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs mt-2" placeholder="Guion completo" oninput="onVoScriptInput()" onblur="onVoScriptCommit()" onpaste="setTimeout(onVoScriptCommit, 0)"></textarea>
+        <textarea id="sceneNarration" rows="2" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs mt-2" placeholder="Guion hablado" oninput="sceneSetNarration(this.value)" onblur="sceneSetNarration(this.value)"></textarea>
+        <div class="flex flex-wrap gap-1.5 mt-2">
+          <button class="tool" id="voBtn" onclick="sceneToggleVo()">VO</button>
+          <button class="tool" id="duckBtn" onclick="sceneToggleDuck()">Duck original</button>
+          <select id="voiceStyleSel" class="scene-select max-w-[120px]" onchange="sceneSetVoiceStyle(this.value)">
+            <option value="documentary">Documental</option>
+            <option value="warm">Cálida</option>
+            <option value="energetic">Enérgica</option>
+            <option value="ad">Anuncio</option>
+            <option value="calm">Calmada</option>
+          </select>
+          <select id="voiceNameSel" class="scene-select max-w-[150px]" onchange="sceneSetVoiceName(this.value)">
+            <option value="">Voz: por estilo</option>
+            <option value="es-PA-MargaritaNeural">Margarita (Panamá)</option>
+            <option value="es-PA-RobertoNeural">Roberto (Panamá)</option>
+            <option value="es-MX-DaliaNeural">Dalia (México)</option>
+            <option value="es-MX-JorgeNeural">Jorge (México)</option>
+            <option value="es-US-AlonsoNeural">Alonso (US)</option>
+            <option value="es-ES-AlvaroNeural">Álvaro (España)</option>
+            <option value="en-US-AndrewNeural">Andrew (EN)</option>
+            <option value="en-US-AriaNeural">Aria (EN)</option>
+          </select>
+          <select id="voFxSel" class="scene-select max-w-[120px]" onchange="sceneSetVoFx(this.value)">
+            <option value="none">FX: ninguno</option>
+            <option value="booth">Cabina</option>
+            <option value="radio">Radio</option>
+            <option value="telephone">Teléfono</option>
+          </select>
+          <select id="voiceEngineSel" class="scene-select max-w-[110px] hidden" onchange="sceneSetVoiceEngine(this.value)">
+            <option value="edge">Edge</option>
+            <option value="eleven">ElevenLabs</option>
+          </select>
+          <button class="tool" id="voPlayBtn" onclick="voPlay()">Play</button>
+          <button class="tool" id="voPauseBtn" onclick="voPause()">Pausa</button>
+          <button class="tool" id="voStopBtn" onclick="voStop()">Stop</button>
+          <label class="tool" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
+            <input type="checkbox" id="voFollowPlay" onchange="setVoFollow(this.checked)">
+            VO
+          </label>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5 mt-2">
+          <button type="button" id="sceneCapOn" class="tool cap-toggle on" onclick="sceneToggleCap(event)" aria-pressed="true">Esta escena</button>
+          <label class="tool" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;">
+            <span>Posición CC</span>
+            <select id="sceneCapPos" class="scene-select max-w-[150px]" onchange="sceneSetCapPos(this.value)">
+              <option value="">Igual</option>
+              <option value="lower-third">Lower-third</option>
+              <option value="top">Arriba</option>
+              <option value="bottom">Abajo</option>
+              <option value="center">Centro</option>
+            </select>
+          </label>
+        </div>
+        <p id="elevenStatus" class="text-[10px] text-neutral-500 mt-2"></p>
+        <div class="mt-3 border-t border-neutral-800 pt-2">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[10px] uppercase tracking-wider text-neutral-500">Color</span>
+            <span id="shuttleBadge" class="text-[10px] font-mono text-yellow-400"></span>
+          </div>
+          <div class="flex flex-wrap gap-1.5 mb-2">
+            <button class="tool" onclick="sceneGradeLook('neutral')">Neutral</button>
+            <button class="tool" onclick="sceneGradeLook('film')">Film</button>
+            <button class="tool" onclick="sceneGradeLook('night')">Night</button>
+            <button class="tool" onclick="sceneGradeLook('golden')">Golden</button>
+            <button class="tool" onclick="sceneGradeLook('punch')">Punch</button>
+          </div>
+          <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-neutral-400">
+            <label>Lift <input type="range" id="gLift" min="-40" max="40" value="0" class="w-full accent-green-500" oninput="sceneSetGrade('lift', this.value/100)" onchange="lockSave()"></label>
+            <label>Gamma <input type="range" id="gGamma" min="40" max="220" value="100" class="w-full accent-green-500" oninput="sceneSetGrade('gamma', this.value/100)" onchange="lockSave()"></label>
+            <label>Gain <input type="range" id="gGain" min="40" max="220" value="100" class="w-full accent-green-500" oninput="sceneSetGrade('gain', this.value/100)" onchange="lockSave()"></label>
+            <label>Sat <input type="range" id="gSat" min="0" max="220" value="100" class="w-full accent-green-500" oninput="sceneSetGrade('sat', this.value/100)" onchange="lockSave()"></label>
+            <label>Temp <input type="range" id="gTemp" min="-100" max="100" value="0" class="w-full accent-green-500" oninput="sceneSetGrade('temp', this.value/100)" onchange="lockSave()"></label>
+            <label>Contrast <input type="range" id="gContrast" min="40" max="220" value="100" class="w-full accent-green-500" oninput="sceneSetGrade('contrast', this.value/100)" onchange="lockSave()"></label>
+          </div>
+          <p class="text-[10px] text-neutral-600 mt-1">JKL shuttle · C razor · Q/W ripple · I/O marcas. Color se exporta con FFmpeg.</p>
+        </div>
+      </section>
+
+      <section id="captionsPanel" class="card rounded-xl p-4 hidden">
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <h2 class="text-sm font-semibold">Captions</h2>
+            <p class="text-[11px] text-neutral-500">Como Instagram Edits: auto CC, estilo, posición, transcripción.</p>
+          </div>
+          <button type="button" id="capOnBtn" class="tool cap-toggle on" onclick="toggleCaptionsOn(event)" aria-pressed="true">CC todas</button>
+        </div>
+        <div class="cap-body">
+        <div class="grid grid-cols-2 gap-2 mb-2">
+          <div>
+            <label class="text-[10px] text-neutral-500">Idioma</label>
+            <select id="capLang" class="scene-select" onchange="capSettings.language=this.value; lockSave()">
+              <option value="es">Español</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[10px] text-neutral-500">Origen</label>
+            <select id="capSource" class="scene-select" onchange="capSettings.source=this.value; lockSave()">
+              <option value="original">Audio del video</option>
+              <option value="narration">Narración / VO</option>
+            </select>
+          </div>
+        </div>
+        <p class="text-[10px] text-neutral-500 mb-1">Estilo</p>
+        <div id="capStyles" class="flex flex-wrap gap-1.5 mb-2"></div>
+        <div class="grid grid-cols-2 gap-2 mb-2">
+          <div>
+            <label class="text-[10px] text-neutral-500">Color texto</label>
+            <input id="capColor" type="color" value="#ffffff" class="w-full h-8 bg-neutral-900 border border-neutral-700 rounded" oninput="capSettings.color=this.value; paintCaption()" onchange="lockSave()">
+          </div>
+          <div>
+            <label class="text-[10px] text-neutral-500">Color fondo</label>
+            <input id="capHighlight" type="color" value="#000000" class="w-full h-8 bg-neutral-900 border border-neutral-700 rounded" oninput="setCaptionBg(this.value)">
+          </div>
+        </div>
+        <div class="mb-2">
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-[10px] text-neutral-500">Fondo</label>
+            <span id="capBgLbl" class="text-[10px] text-neutral-400">Negro</span>
+          </div>
+          <div id="capBgs" class="flex flex-wrap gap-1.5 mb-1.5"></div>
+          <div id="capBgOpacityRow" class="flex items-center gap-2">
+            <span class="text-[10px] text-neutral-500">Opacidad fondo</span>
+            <input id="capBgOpacity" type="range" min="15" max="100" value="85" class="flex-1 accent-green-500" oninput="setCaptionBgOpacity(this.value/100)" onchange="lockSave()">
+            <span id="capBgOpacityLbl" class="text-[10px] text-neutral-400 w-8">85%</span>
+          </div>
+        </div>
+        <div class="mb-2">
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-[10px] text-neutral-500">Tamaño</label>
+            <span id="capSizeLbl" class="text-[10px] text-neutral-400">42 px</span>
+          </div>
+          <div id="capSizes" class="flex flex-wrap gap-1.5 mb-1.5"></div>
+          <input id="capSize" type="range" min="22" max="96" value="42" step="2" class="w-full accent-green-500" oninput="setCaptionSize(this.value)" onchange="lockSave()">
+        </div>
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-[10px] text-neutral-500">Opacidad</span>
+          <input id="capOpacity" type="range" min="20" max="100" value="100" class="flex-1 accent-green-500" oninput="capSettings.opacity=this.value/100; paintCaption()" onchange="lockSave()">
+          <select id="capPos" class="scene-select max-w-[130px]" onchange="capSettings.position=this.value; paintCaption(); lockSave()">
+            <option value="lower-third">Lower-third</option>
+            <option value="center">Centro</option>
+            <option value="top">Arriba</option>
+            <option value="bottom">Abajo</option>
+          </select>
+        </div>
+        <div class="flex flex-wrap gap-3 text-[11px] text-neutral-400 mb-3">
+          <label><input type="checkbox" id="capPunct" checked onchange="capSettings.punctuation=this.checked; lockSave()"> Puntuación</label>
+          <label><input type="checkbox" id="capTitle" onchange="capSettings.titleCase=this.checked; lockSave()"> Title case</label>
+          <label><input type="checkbox" id="capCurse" onchange="capSettings.showProfanity=this.checked; lockSave()"> Mostrar groserías</label>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5">
+          <button type="button" class="accent text-black font-semibold px-4 py-2 rounded-md text-sm" onclick="generateCaptions()">Generar captions</button>
+          <button type="button" class="tool" onclick="syncVoCaptions()">Sincronizar VO</button>
+          <span id="capStatus" class="text-[11px] text-neutral-500 ml-2"></span>
+        </div>
+        <textarea id="capTranscript" rows="10" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-1 text-xs mt-3 font-mono" placeholder="Pega aquí la transcripción CON TIEMPOS, una línea por caption:&#10;0:00 El río baja turbio&#10;0:08 La comunidad no tiene agua&#10;0:15 Esto tiene que cambiar&#10;&#10;También vale SRT o 00:00:01 --> 00:00:04" oninput="onTranscriptInput()" onchange="onTranscriptInput()"></textarea>
+        <div id="capCueList"></div>
+        </div>
+      </section>
+    </main>
+
+    <aside class="lg:col-span-3 space-y-2">
+      <div class="flex items-baseline justify-between px-1">
+        <h2 class="text-xs uppercase tracking-wider text-neutral-500">Escenas</h2>
+        <p id="sceneCountLbl" class="text-[11px] text-green-400">0 escenas</p>
+      </div>
+      <p id="planSummary" class="text-[11px] text-neutral-500 px-1">Clic un clip a la izquierda. Arrastra para reordenar.</p>
+      <div id="sceneList"></div>
+    </aside>
+  </div>
+
+  <div id="clipPreviewModal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onclick="if(event.target===this)closePreview()">
+    <div class="card rounded-xl w-full max-w-2xl overflow-hidden" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between px-4 py-2 border-b border-neutral-800">
+        <h3 id="clipPreviewTitle" class="truncate text-sm"></h3>
+        <button type="button" onclick="closePreview()" class="text-xs text-neutral-400">Cerrar</button>
+      </div>
+      <video id="clipPreviewVideo" controls playsinline></video>
+    </div>
+  </div>
+
+  <div id="exportOverlay" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+    <div class="card rounded-xl p-6 w-96 text-left">
+      <h3 class="text-sm font-semibold mb-3">Exportar película</h3>
+      <div id="exportForm">
+        <label class="text-xs text-neutral-500">Nombre</label>
+        <input id="exportName" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm mb-3" value="mi_pelicula">
+        <label class="text-xs text-neutral-500">Calidad</label>
+        <select id="exportRes" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm mb-4">
+          <option value="1080">1080p</option>
+          <option value="720" selected>720p</option>
+          <option value="480">480p</option>
+        </select>
+        <button type="button" id="exportGoBtn" onclick="startExport()" class="accent text-black font-semibold w-full px-4 py-2 rounded-md">Renderizar</button>
+      </div>
+      <div id="exportProgressWrap" class="hidden">
+        <p id="exportStatus" class="text-sm mb-2">Renderizando…</p>
+        <div class="export-track mb-2"><div id="exportBar" class="export-fill"></div></div>
+        <p id="exportPct" class="text-xs text-green-400 mb-1">0%</p>
+        <p id="exportHint" class="text-[11px] text-neutral-500">No cierres esta ventana. Cada escena se recorta y luego se unen.</p>
+      </div>
+      <a id="exportLink" class="hidden accent inline-block mt-3 px-4 py-2 rounded-md text-black font-semibold" href="#" target="_blank">Abrir MP4</a>
+      <button type="button" id="exportCloseBtn" onclick="closeExport()" class="mt-3 text-sm text-neutral-400 w-full">Cerrar</button>
+    </div>
+  </div>
+
+  <script>
+    var library = [];
+    var plan = { title: "", scenes: [], duration: 0, summary: "", script: "" };
+    var selectedSceneIndex = null;
+    var currentTime = 0;
+    var isPlaying = false;
+    var raf = null;
+    var playClockOrigin = 0;
+    var playClockTime = 0;
+    var playSceneIdx = -1;
+    var sequenceRev = 0;
+    var restoring = false;
+    var saveTimer = null;
+    var dragFrom = null;
+    var dragClip = null;
+    var didDrag = false;
+    var chatHistory = [];
+    var planUndo = [];
+    var planRedo = [];
+    var voPlayer = null;
+    var voAudioUrl = "";
+    var voAudioSig = "";
+    var voNarDirty = false;
+    var voEdgeStatus = "Edge listo.";
+    var voTransport = "Detenido";
+    var voStopping = false;
+    var voFollowBusy = false;
+    var voSyncBusy = false;
+    var voFollowSceneIdx = -1;
+    var voScriptDirty = false;
+    var voCapCues = [];
+    var voCapWords = [];
+    var voDuration = 0;
+    var musicPlayer = null;
+    var musicUrl = "";
+    var musicName = "";
+    var musicVolume = 0.25;
+    var musicMute = false;
+    var SAVE_KEY = "pvs-video-creation-v1";
+    var HIDDEN_KEY = "pvs-create-hidden";
+    var RAIL_KEY = "pvs-create-rail";
+    var capSettings = {
+      on: true,
+      language: "es",
+      source: "original",
+      style: "classic",
+      color: "#ffffff",
+      highlight: "#000000",
+      bgOn: true,
+      bgOpacity: 0.85,
+      opacity: 1,
+      position: "lower-third",
+      size: 42,
+      punctuation: true,
+      titleCase: false,
+      showProfanity: false,
+      cues: []
+    };
+    var CAP_BGS = [
+      { id: "none", label: "Ninguno", color: "" },
+      { id: "black", label: "Negro", color: "#000000" },
+      { id: "yellow", label: "Amarillo", color: "#facc15" },
+      { id: "white", label: "Blanco", color: "#ffffff" },
+      { id: "pink", label: "Rosa", color: "#ec4899" }
+    ];
+    var CAP_SIZES = [
+      { id: "s", label: "S", px: 28 },
+      { id: "m", label: "M", px: 36 },
+      { id: "l", label: "L", px: 48 },
+      { id: "xl", label: "XL", px: 64 }
+    ];
+    var CAP_STYLES = [
+      { id: "classic", label: "Classic", color: "#ffffff", highlight: "#000000", font: "sans", size: 42 },
+      { id: "bold", label: "Bold", color: "#ffffff", highlight: "#facc15", font: "bold", size: 48 },
+      { id: "retro", label: "Retro", color: "#fef3c7", highlight: "#7c2d12", font: "serif", size: 40 },
+      { id: "playful", label: "Playful", color: "#ffffff", highlight: "#ec4899", font: "rounded", size: 44 },
+      { id: "handwritten", label: "Handwritten", color: "#fde68a", highlight: "", font: "rounded", size: 40 },
+      { id: "bubble", label: "Bubble", color: "#111111", highlight: "#ffffff", font: "rounded", size: 42 },
+      { id: "modern", label: "Modern", color: "#ffffff", highlight: "", font: "sans", size: 36 },
+      { id: "literature", label: "Literature", color: "#f5f5f4", highlight: "", font: "serif", size: 38 }
+    ];
+
+    function $(id) { return document.getElementById(id); }
+    function escapeHtml(s) {
+      return String(s || "").replace(/[&<>"']/g, function (ch) {
+        return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch];
+      });
+    }
+    function fileName(v) {
+      if (!v) return "";
+      var parts = String(v).split("/");
+      var last = parts[parts.length - 1] || String(v);
+      try { return decodeURIComponent(last); } catch (e) { return last; }
+    }
+    function clipUrl(v) {
+      var n = fileName(v);
+      return n ? "/clips/" + encodeURIComponent(n) : "";
+    }
+    var previewProxy = Object.create(null);
+    var proxyKick = Object.create(null);
+    function mediaPreviewUrl(name) {
+      var n = fileName(name);
+      if (n && previewProxy[n]) return previewProxy[n];
+      return clipUrl(n);
+    }
+    function kickProxy(name) {
+      var n = fileName(name);
+      if (!n || previewProxy[n] || previewProxy[n] === "" || proxyKick[n]) return;
+      proxyKick[n] = true;
+      fetch("/api/clips/proxy?name=" + encodeURIComponent(n))
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d && d.ready && d.url) { previewProxy[n] = d.url; return; }
+          if (d && d.skipped) { previewProxy[n] = ""; return; }
+          return fetch("/api/clips/proxy?name=" + encodeURIComponent(n), { method: "POST" })
+            .then(function (r2) { return r2.json(); })
+            .then(function (d2) {
+              if (d2 && d2.ready && d2.url) previewProxy[n] = d2.url;
+              else if (d2 && d2.skipped) previewProxy[n] = "";
+              else setTimeout(function () { proxyKick[n] = false; kickProxy(n); }, 8000);
+            });
+        })
+        .catch(function () { proxyKick[n] = false; });
+    }
+    function posterUrl(name, t) {
+      var n = fileName(name);
+      var at = Math.max(0, Math.round((Number(t) || 0) * 10) / 10);
+      return "/api/clips/poster?name=" + encodeURIComponent(n) + "&t=" + at;
+    }
+    var posterMakeQ = [];
+    var posterMakeBusy = false;
+    function enqueuePosterMake(img, url) {
+      posterMakeQ.push({ img: img, url: url });
+      drainPosterMake();
+    }
+    function drainPosterMake() {
+      if (posterMakeBusy || !posterMakeQ.length) return;
+      var job = posterMakeQ.shift();
+      if (!job.img || !job.img.isConnected) { drainPosterMake(); return; }
+      posterMakeBusy = true;
+      fetch(job.url + (job.url.indexOf("?") >= 0 ? "&" : "?") + "make=1")
+        .then(function (r) { return r.ok ? r.blob() : null; })
+        .then(function (b) {
+          if (b && job.img && job.img.isConnected) {
+            job.img.classList.remove("poster-miss");
+            job.img.src = URL.createObjectURL(b);
+          }
+        })
+        .catch(function () {})
+        .then(function () { posterMakeBusy = false; drainPosterMake(); });
+    }
+    function bindPoster(img, name, t) {
+      if (!img || !name) return;
+      var url = posterUrl(name, t);
+      img.classList.add("poster-miss");
+      img.alt = "";
+      img.onload = function () { img.classList.remove("poster-miss"); };
+      img.onerror = function () {
+        img.onerror = null;
+        img.removeAttribute("src");
+        img.classList.add("poster-miss");
+        enqueuePosterMake(img, url);
+      };
+      img.src = url;
+    }
+    function libBy(name) {
+      name = fileName(name);
+      for (var i = 0; i < library.length; i++) if (library[i].name === name) return library[i];
+      return null;
+    }
+    function clipDur(name) {
+      var c = libBy(name);
+      var d = c ? Number(c.duration) : 0;
+      return d > 0 ? d : 0;
+    }
+    function sceneDur(s) {
+      if (!s) return 0.2;
+      if (s.freeze) {
+        var fd = Number(s.duration);
+        return Math.max(0.2, isFinite(fd) && fd > 0 ? fd : 2);
+      }
+      return Math.max(0.2, (Number(s.outPoint) - Number(s.inPoint)) / (s.speed || 1));
+    }
+    function sceneSourceMax(s) {
+      var maxD = clipDur(s && s.clip);
+      if (maxD > 0.2) return maxD;
+      return Math.max(Number(s && s.outPoint) || 4, (Number(s && s.inPoint) || 0) + 4);
+    }
+    function scenePlayMax(s) {
+      var left = Math.max(0.4, sceneSourceMax(s) - (Number(s.inPoint) || 0));
+      return left / (s.speed || 1);
+    }
+    function syncSceneDurSlider(s) {
+      var el = $("sceneDur");
+      var lbl = $("sceneDurLbl");
+      if (!el || !s) return;
+      var play = sceneDur(s);
+      var maxPlay = scenePlayMax(s);
+      el.min = "4";
+      el.max = String(Math.max(4, Math.round(maxPlay * 10)));
+      if (document.activeElement !== el) el.value = String(Math.round(play * 10));
+      if (lbl) lbl.textContent = play.toFixed(1) + "s";
+    }
+    function paintSceneDurLabels(s) {
+      var txt = clock(sceneDur(s));
+      var card = document.querySelector('.scene-card[data-i="' + selectedSceneIndex + '"]');
+      if (card) {
+        var durEl = card.querySelector(".scene-dur");
+        var sub = card.querySelector(".scene-sub");
+        if (durEl) durEl.textContent = txt;
+        if (sub) sub.textContent = txt;
+      }
+      var count = $("sceneCountLbl");
+      if (count) count.textContent = ((plan.scenes || []).length) + " escenas · " + clock(plan.duration || 0);
+    }
+    function clock(s) {
+      s = Math.max(0, Number(s) || 0);
+      var m = Math.floor(s / 60);
+      var sec = Math.floor(s % 60);
+      return m + ":" + String(sec).padStart(2, "0");
+    }
+    function pretty(name) {
+      return fileName(name).replace(/\.[^/.]+$/, "") || "Sin clip";
+    }
+    function hiddenList() {
+      try { return JSON.parse(localStorage.getItem(HIDDEN_KEY) || "[]"); } catch (e) { return []; }
+    }
+    function setHidden(arr) {
+      try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(arr)); } catch (e) {}
+    }
+
+    function incomingNames() {
+      var out = [];
+      function push(n) {
+        n = fileName(n);
+        if (n && out.indexOf(n) < 0) out.push(n);
+      }
+      if (window.__PVS_INCOMING && window.__PVS_INCOMING.length) {
+        window.__PVS_INCOMING.forEach(push);
+      }
+      var q = new URLSearchParams(window.location.search).get("clips");
+      if (q) q.split(",").forEach(function (s) { push(s.trim()); });
+      try {
+        var inc = JSON.parse(localStorage.getItem("pvs-create-incoming") || "null");
+        if (inc && inc.names) inc.names.forEach(push);
+      } catch (e) {}
+      return out;
+    }
+
+    function loadSavedProject() {
+      var saved = null;
+      try { saved = JSON.parse(localStorage.getItem(SAVE_KEY) || "null"); } catch (e) {}
+      return saved;
+    }
+
+    function makeScene(name, i) {
+      name = fileName(name);
+      var dur = clipDur(name) || 4;
+      return {
+        order: (i || 0) + 1,
+        clip: name,
+        url: clipUrl(name),
+        inPoint: 0,
+        outPoint: dur,
+        narration: "",
+        text: "",
+        textPosition: "lower-third",
+        timelineStart: 0,
+        rotation: 0,
+        speed: 1,
+        muted: false,
+        volume: 1,
+        crop: null,
+        voiceover: false,
+        voiceStyle: "documentary",
+        voiceEngine: "edge",
+        voiceName: "",
+        voFx: "none",
+        voRate: 1,
+        capOff: false,
+        capPos: "",
+        freeze: false,
+        fadeIn: false,
+        fadeOut: false,
+        duration: dur,
+        duckOriginal: false,
+        grade: defaultGrade()
+      };
+    }
+
+    function defaultGrade() {
+      return { lift: 0, gamma: 1, gain: 1, sat: 1, temp: 0, contrast: 1 };
+    }
+    function normalizeGrade(g) {
+      var d = defaultGrade();
+      if (!g || typeof g !== "object") return d;
+      function num(k, def) {
+        var v = Number(g[k]);
+        return isFinite(v) ? v : def;
+      }
+      return {
+        lift: Math.max(-0.4, Math.min(0.4, num("lift", 0))),
+        gamma: Math.max(0.4, Math.min(2.2, num("gamma", 1))),
+        gain: Math.max(0.4, Math.min(2.2, num("gain", 1))),
+        sat: Math.max(0, Math.min(3, num("sat", 1))),
+        temp: Math.max(-1, Math.min(1, num("temp", 0))),
+        contrast: Math.max(0.4, Math.min(2.2, num("contrast", 1)))
+      };
+    }
+    var GRADE_LOOKS = {
+      neutral: { lift: 0, gamma: 1, gain: 1, sat: 1, temp: 0, contrast: 1 },
+      film: { lift: 0.04, gamma: 1.05, gain: 0.96, sat: 0.88, temp: 0.12, contrast: 1.08 },
+      night: { lift: -0.08, gamma: 0.92, gain: 1.05, sat: 0.82, temp: -0.35, contrast: 1.12 },
+      golden: { lift: 0.02, gamma: 1.04, gain: 1.06, sat: 1.12, temp: 0.42, contrast: 1.06 },
+      punch: { lift: -0.05, gamma: 1, gain: 1.08, sat: 1.18, temp: 0.08, contrast: 1.22 }
+    };
+    function gradeCss(g) {
+      g = normalizeGrade(g);
+      var brightness = 1 + g.lift * 0.28 + (g.gain - 1) * 0.14;
+      var hue = g.temp * 16;
+      var sepia = Math.max(0, g.temp) * 0.2;
+      return "brightness(" + brightness.toFixed(3) + ") contrast(" + g.contrast.toFixed(3) +
+        ") saturate(" + g.sat.toFixed(3) + ") hue-rotate(" + hue.toFixed(1) + "deg) sepia(" + sepia.toFixed(3) + ")";
+    }
+    var assembleShuttle = 0;
+    var assembleShuttleRaf = null;
+    var assembleShuttleTs = 0;
+    var assembleMarkIn = null;
+    var assembleMarkOut = null;
+
+    function rebuild(deferSave) {
+      var t = 0;
+      (plan.scenes || []).forEach(function (s, i) {
+        s.order = i + 1;
+        s.timelineStart = t;
+        var d = sceneDur(s);
+        if (!s.freeze) s.duration = d;
+        t += d;
+      });
+      plan.duration = t;
+      if (deferSave) scheduleSave();
+      else lockSave();
+    }
+
+    function sceneCount(data) {
+      try { return (((data || {}).plan || {}).scenes || []).length; } catch (e) { return 0; }
+    }
+
+    function pickSaved(local, disk) {
+      var ln = sceneCount(local);
+      var dn = sceneCount(disk);
+      if (dn > 0 && ln === 0) return disk;
+      if (ln > 0 && dn === 0) return local;
+      if (ln === 0 && dn === 0) return null;
+      // A 1-clip send must not replace a full board. Keep the larger project.
+      if (dn > ln) return disk;
+      if (ln > dn) return local;
+      var lr = Number((local && local.rev) || 0);
+      var dr = Number((disk && disk.rev) || 0);
+      if (dr !== lr) return dr > lr ? disk : local;
+      var lt = Number((local && local.savedAt) || 0);
+      var dt = Number((disk && disk.savedAt) || 0);
+      return dt >= lt ? disk : local;
+    }
+
+    function active() {
+      if (selectedSceneIndex == null) return null;
+      return plan.scenes[selectedSceneIndex] || null;
+    }
+
+    function selectedClipNames() {
+      var names = [].map.call(document.querySelectorAll(".clip-check:checked"), function (el) {
+        return fileName(el.value);
+      }).filter(Boolean);
+      if (names.length) return names;
+      return (library || []).map(function (c) { return c && c.name; }).filter(Boolean);
+    }
+    function toggleClipChecks(on) {
+      document.querySelectorAll(".clip-check").forEach(function (el) { el.checked = !!on; });
+    }
+    function loadSelectedAsScenes(replace) {
+      var names = [].map.call(document.querySelectorAll(".clip-check:checked"), function (el) {
+        return fileName(el.value);
+      }).filter(Boolean);
+      if (!names.length) {
+        names = (library || []).map(function (c) { return c && c.name; }).filter(Boolean);
+      }
+      if (!names.length) {
+        var hint = $("clipListHint");
+        if (hint) hint.textContent = "No hay clips para cargar.";
+        return 0;
+      }
+      if (plan.scenes && plan.scenes.length) {
+        try { planUndo.push(JSON.parse(JSON.stringify(plan))); } catch (e) {}
+      }
+      if (replace) plan.scenes = [];
+      if (!plan.scenes) plan.scenes = [];
+      names.forEach(function (name) {
+        plan.scenes.push(makeScene(name, plan.scenes.length));
+      });
+      rebuild();
+      selectedSceneIndex = plan.scenes.length ? 0 : null;
+      currentTime = 0;
+      renderAll();
+      if (plan.scenes.length) syncPreview(0, false);
+      var hint = $("clipListHint");
+      if (hint) hint.textContent = names.length + " clip(s) → escenas.";
+      return names.length;
+    }
+    function addClipAsScene(name, at) {
+      name = fileName(name);
+      if (!name) return;
+      var s = makeScene(name, (plan.scenes || []).length);
+      if (!plan.scenes) plan.scenes = [];
+      var idx = (at == null || at < 0 || at > plan.scenes.length) ? plan.scenes.length : at;
+      plan.scenes.splice(idx, 0, s);
+      rebuild();
+      selectedSceneIndex = idx;
+      currentTime = s.timelineStart || 0;
+      renderAll();
+      syncPreview(currentTime, false);
+      var hint = $("clipListHint");
+      if (hint) hint.textContent = pretty(name) + " → escena " + (idx + 1);
+    }
+
+    function renderClips(highlight) {
+      var box = $("clipList");
+      var hid = hiddenList();
+      var vis = library.filter(function (c) { return hid.indexOf(c.name) < 0; });
+      var show = $("showHiddenBtn");
+      if (show) {
+        show.classList.toggle("hidden", hid.length === 0);
+        show.textContent = hid.length ? ("Mostrar " + hid.length + " ocultos") : "";
+      }
+      if (!library.length) {
+        box.innerHTML = '<p class="text-neutral-500 text-xs">No hay clips. Busca footage web arriba o guarda uno en Edit.</p>';
+        return;
+      }
+      if (!vis.length) {
+        box.innerHTML = '<p class="text-neutral-500 text-xs">Todos ocultos. Pulsa mostrar.</p>';
+        return;
+      }
+      highlight = highlight || [];
+      vis.sort(function (a, b) {
+        var ha = highlight.indexOf(a.name) >= 0 ? 0 : 1;
+        var hb = highlight.indexOf(b.name) >= 0 ? 0 : 1;
+        return ha - hb;
+      });
+      box.innerHTML = vis.map(function (c) {
+        var enc = encodeURIComponent(c.name);
+        var on = highlight.length === 0 || highlight.indexOf(c.name) >= 0;
+        var ring = highlight.indexOf(c.name) >= 0 ? "ring-1 ring-green-700" : "";
+        return '<div class="clip-row flex gap-1 items-start py-1.5 px-2 rounded hover:bg-neutral-800 ' + ring + '" data-name="' + enc + '">' +
+          '<input type="checkbox" class="mt-1 clip-check shrink-0" value="' + escapeHtml(c.name) + '" ' + (on ? "checked" : "") + '>' +
+          '<div class="min-w-0 flex-1 clip-add">' +
+          '<span class="block truncate text-neutral-200">' + escapeHtml(c.title || c.name) + '</span>' +
+          '<span class="text-[10px] text-neutral-500">' + (c.duration || "?") + 's</span></div>' +
+          '<button type="button" class="clip-prev shrink-0 text-neutral-500 px-1" data-name="' + enc + '">▶</button>' +
+          '<button type="button" class="clip-hide shrink-0 text-neutral-500 px-1" data-name="' + enc + '">✕</button></div>';
+      }).join("");
+    }
+
+    function renderScenes() {
+      var box = $("sceneList");
+      var cards = (plan.scenes || []).map(function (s, i) {
+        var activeCls = i === selectedSceneIndex ? "scene-active" : "";
+        var thumb = s.clip
+          ? '<img class="poster-miss" alt="" data-clip="' + escapeHtml(s.clip) + '" data-t="' + (Number(s.inPoint) || 0) + '">' +
+            '<span class="scene-dur">' + clock(sceneDur(s)) + '</span>' +
+            '<button type="button" class="scene-play" data-i="' + i + '">▶</button>'
+          : '<div class="text-neutral-500 text-xs p-6">Sin clip</div>';
+        return '<div class="scene-card card rounded-lg ' + activeCls + '" draggable="true" data-i="' + i + '">' +
+          '<div class="scene-thumb">' + thumb + '</div>' +
+          '<div class="scene-meta"><div class="text-[10px] text-neutral-500">⋮⋮ Escena ' + (i + 1) + '</div>' +
+          '<div class="scene-name">' + escapeHtml(pretty(s.clip)) + '</div>' +
+          '<div class="scene-sub">' + clock(sceneDur(s)) + '</div></div></div>';
+      }).join("");
+      box.innerHTML = cards +
+        '<button type="button" class="scene-add" id="addSceneBtn"><span class="text-3xl">+</span><span class="text-xs">Añadir escena</span></button>';
+      box.querySelectorAll(".scene-thumb img[data-clip]").forEach(function (img) {
+        bindPoster(img, img.getAttribute("data-clip"), img.getAttribute("data-t"));
+      });
+      (plan.scenes || []).forEach(function (s) { if (s.clip) kickProxy(s.clip); });
+      var n = (plan.scenes || []).length;
+      var lbl = $("sceneCountLbl");
+      if (lbl) lbl.textContent = n + " escenas · " + clock(plan.duration || 0);
+      var empty = $("emptyPreview");
+      if (empty) empty.style.display = n ? "none" : "";
+    }
+    function markSelectedScene(i) {
+      selectedSceneIndex = i;
+      var box = $("sceneList");
+      if (!box) return;
+      box.querySelectorAll(".scene-card").forEach(function (el) {
+        el.classList.toggle("scene-active", Number(el.getAttribute("data-i")) === i);
+      });
+    }
+
+    function isNarrationEditing() {
+      var nar = $("sceneNarration");
+      return !!(nar && document.activeElement === nar);
+    }
+    function flushNarration() {
+      var nar = $("sceneNarration");
+      var s = active();
+      if (!nar || !s) return s;
+      if (document.activeElement === nar || voNarDirty) {
+        s.narration = nar.value;
+        voNarDirty = false;
+      }
+      return s;
+    }
+    function renderTools() {
+      var bar = $("sceneTools");
+      var s = flushNarration() || active();
+      if (!bar) return;
+      if (!s) { bar.classList.add("hidden"); return; }
+      bar.classList.remove("hidden");
+      $("sceneToolsTitle").textContent = "Escena " + s.order;
+      var sel = $("sceneClipSelect");
+      sel.innerHTML = '<option value="">Elegir clip…</option>' + library.map(function (c) {
+        return '<option value="' + escapeHtml(c.name) + '"' + (c.name === s.clip ? " selected" : "") + '>' + escapeHtml(c.title || c.name) + '</option>';
+      }).join("");
+      $("sceneSpeed").value = String(Math.round((s.speed || 1) * 100));
+      $("sceneSpeedLbl").textContent = (s.speed || 1).toFixed(1) + "x";
+      syncSceneDurSlider(s);
+      var vr = $("voRate");
+      var rate = Math.max(0.5, Math.min(1.5, Number(s.voRate == null ? 1 : s.voRate) || 1));
+      if (vr) vr.value = String(Math.round(rate * 100));
+      var vrl = $("voRateLbl");
+      if (vrl) vrl.textContent = rate.toFixed(2) + "x";
+      $("muteBtn").classList.toggle("on", !!s.muted);
+      var voBtn = $("voBtn");
+      var duckBtn = $("duckBtn");
+      if (voBtn) voBtn.classList.toggle("on", !!s.voiceover);
+      if (duckBtn) duckBtn.classList.toggle("on", !!s.duckOriginal);
+      var vs = $("voiceStyleSel");
+      if (vs) vs.value = s.voiceStyle || "documentary";
+      var vn = $("voiceNameSel");
+      if (vn) vn.value = s.voiceName || "";
+      var fx = $("voFxSel");
+      if (fx) fx.value = s.voFx || "none";
+      var ve = $("voiceEngineSel");
+      if (ve) ve.value = s.voiceEngine === "eleven" ? "eleven" : "edge";
+      syncSceneCapToggle();
+      var capPos = $("sceneCapPos");
+      if (capPos) capPos.value = s.capPos || "";
+      var nar = $("sceneNarration");
+      if (nar && !isNarrationEditing()) {
+        var next = s.narration || "";
+        if (nar.value !== next) nar.value = next;
+      }
+      var full = $("voScript");
+      if (full && document.activeElement !== full && !voScriptDirty) {
+        var sc = plan.script || "";
+        if (full.value !== sc) full.value = sc;
+      }
+      syncSceneGradeSliders(s.grade);
+    }
+
+    function syncSceneGradeSliders(g) {
+      g = normalizeGrade(g);
+      function set(id, val) {
+        var el = $(id);
+        if (el) el.value = String(Math.round(val * 100));
+      }
+      set("gLift", g.lift);
+      set("gGamma", g.gamma);
+      set("gGain", g.gain);
+      set("gSat", g.sat);
+      set("gTemp", g.temp);
+      set("gContrast", g.contrast);
+    }
+    function sceneSetGrade(key, value) {
+      var s = active();
+      if (!s) return;
+      s.grade = normalizeGrade(s.grade);
+      s.grade[key] = Number(value);
+      s.grade = normalizeGrade(s.grade);
+      applyScenePreviewFx(s);
+      scheduleSave();
+    }
+    function sceneGradeLook(name) {
+      var s = active();
+      if (!s) return;
+      s.grade = normalizeGrade(GRADE_LOOKS[name] || GRADE_LOOKS.neutral);
+      syncSceneGradeSliders(s.grade);
+      applyScenePreviewFx(s);
+      lockSave();
+    }
+    function previewEls() {
+      return [$("preview-video"), $("preview-video-b")].filter(Boolean);
+    }
+    function previewLive() {
+      var els = previewEls();
+      return els.find(function (v) { return v.classList.contains("is-front"); }) || els[0];
+    }
+    function previewHidden() {
+      var els = previewEls();
+      var live = previewLive();
+      return els.find(function (v) { return v !== live; }) || els[1] || els[0];
+    }
+    function previewShow(el) {
+      previewEls().forEach(function (v) {
+        var front = v === el;
+        v.classList.toggle("is-front", front);
+        v.classList.toggle("is-back", !front);
+        if (!front) {
+          try { v.pause(); } catch (e) {}
+          v.style.opacity = "0";
+          v.style.visibility = "hidden";
+        } else {
+          v.style.visibility = "visible";
+        }
+      });
+    }
+    function previewPauseAll() {
+      previewEls().forEach(function (v) { try { v.pause(); } catch (e) {} });
+    }
+    var previewSwapGen = 0;
+    function waitReadyFrame(video, t, done) {
+      var finished = false;
+      function finish() {
+        if (finished) return;
+        finished = true;
+        video.removeEventListener("loadeddata", onLoaded);
+        video.removeEventListener("seeked", onSeeked);
+        done();
+      }
+      function kickSeek() {
+        var target = Math.max(0, Number(t) || 0);
+        if (video.readyState >= 2 && video.videoWidth && Math.abs((video.currentTime || 0) - target) < 0.05) {
+          finish();
+          return;
+        }
+        try { video.currentTime = target; } catch (e) { finish(); }
+      }
+      function onLoaded() { kickSeek(); }
+      function onSeeked() { finish(); }
+      video.addEventListener("loadeddata", onLoaded);
+      video.addEventListener("seeked", onSeeked);
+      if (video.readyState >= 2) kickSeek();
+      setTimeout(function () { if (video.videoWidth) finish(); }, 1400);
+    }
+    function sceneFadeOpacity(s, t) {
+      if (!s) return 1;
+      var start = Number(s.timelineStart) || 0;
+      var dur = sceneDur(s);
+      var local = (Number(t) || 0) - start;
+      var fade = 0.6;
+      var o = 1;
+      if (s.fadeIn) o = Math.min(o, Math.max(0, local / fade));
+      if (s.fadeOut) o = Math.min(o, Math.max(0, (dur - local) / fade));
+      if (o !== o) o = 1;
+      return Math.max(0, Math.min(1, o));
+    }
+    function applyScenePreviewFx(s, el) {
+      var video = el || previewLive();
+      if (!video) return;
+      video.style.filter = s ? gradeCss(s.grade) : "";
+      var rot = s && s.rotation ? "rotate(" + s.rotation + "deg)" : "";
+      video.style.transform = rot;
+      if (video.classList.contains("is-back")) {
+        video.style.opacity = "0";
+        video.style.visibility = "hidden";
+        return;
+      }
+      video.style.visibility = "visible";
+      video.style.opacity = String(sceneFadeOpacity(s, currentTime));
+    }
+    function previewWarmNext(url, at, clipName) {
+      var back = previewHidden();
+      if (!back || !url) return;
+      if (back.dataset.loadedUrl === url && back.readyState >= 2) {
+        try { if (Math.abs((back.currentTime || 0) - at) > 0.12) back.currentTime = at; } catch (e) {}
+        return;
+      }
+      if (back.dataset.warm === url) return;
+      back.dataset.warm = url;
+      back.dataset.loadedUrl = url;
+      back.dataset.clip = clipName || "";
+      back.src = url;
+      back.addEventListener("loadeddata", function once() {
+        back.removeEventListener("loadeddata", once);
+        try { back.currentTime = at; } catch (e) {}
+      });
+    }
+
+    function updateMain() {
+      var has = !!(plan.scenes && plan.scenes.length);
+      $("briefPanel").classList.toggle("hidden", has);
+      var chat = $("chatPanel");
+      if (chat) chat.classList.remove("hidden");
+      var cap = $("captionsPanel");
+      if (cap) cap.classList.toggle("hidden", !has);
+      syncCaptionToggle();
+    }
+
+    function renderAll() {
+      renderScenes();
+      renderTools();
+      updateMain();
+      updateHud();
+    }
+
+    function sceneAt(t) {
+      return sceneCovering(t) || plan.scenes[plan.scenes.length - 1];
+    }
+    function sceneCovering(t) {
+      t = Number(t) || 0;
+      var scenes = plan.scenes || [];
+      for (var i = 0; i < scenes.length; i++) {
+        var s = scenes[i];
+        var start = Number(s.timelineStart) || 0;
+        var end = start + sceneDur(s);
+        if (t >= start && t < end) return s;
+      }
+      return null;
+    }
+    function sceneWindow(s) {
+      var start = Number(s && s.timelineStart) || 0;
+      return [start, start + sceneDur(s)];
+    }
+    function capOffWindows() {
+      return (plan.scenes || []).filter(function (s) { return s && s.capOff; }).map(function (s) {
+        var w = sceneWindow(s);
+        return [Math.max(0, w[0] - 0.4), w[1]];
+      });
+    }
+    function timeInCapOff(t) {
+      t = Number(t) || 0;
+      var holes = capOffWindows();
+      for (var i = 0; i < holes.length; i++) {
+        if (t >= holes[i][0] && t < holes[i][1]) return true;
+      }
+      return false;
+    }
+    function subtractCapOff(start, end, holes) {
+      var segs = [[start, end]];
+      (holes || []).forEach(function (h) {
+        var nxt = [];
+        segs.forEach(function (seg) {
+          var a = seg[0], b = seg[1], h0 = h[0], h1 = h[1];
+          if (h1 <= a || h0 >= b) { nxt.push([a, b]); return; }
+          if (a < h0) nxt.push([a, Math.min(b, h0)]);
+          if (b > h1) nxt.push([Math.max(a, h1), b]);
+        });
+        segs = nxt.filter(function (seg) { return seg[1] - seg[0] > 0.05; });
+      });
+      return segs;
+    }
+
+    function syncPreview(t, play) {
+      var s = sceneAt(t);
+      var front = previewLive();
+      if (!s || !front) return;
+      if (!s.clip) {
+        previewPauseAll();
+        return;
+      }
+      var local = s.freeze
+        ? (Number(s.inPoint) || 0)
+        : (Number(s.inPoint) || 0) + (t - (Number(s.timelineStart) || 0)) * (s.speed || 1);
+      kickProxy(s.clip);
+      var url = mediaPreviewUrl(s.clip);
+      var rate = (s.speed || 1) * (assembleShuttle > 0 ? assembleShuttle : 1);
+      function paintLive(el) {
+        el.muted = !!s.muted;
+        el.playbackRate = rate;
+        applyScenePreviewFx(s, el);
+        if (s.freeze) {
+          try { el.pause(); } catch (e0) {}
+          return;
+        }
+        if (play) el.play().catch(function () {});
+        else el.pause();
+      }
+      if (front.dataset.clip === s.clip && front.dataset.loadedUrl === url) {
+        if (Math.abs((front.currentTime || 0) - local) > 0.3) {
+          try { front.currentTime = local; } catch (e) {}
+        }
+        paintLive(front);
+        paintCaption();
+        if (play) {
+          var remain = s.timelineStart + sceneDur(s) - t;
+          var idx = plan.scenes.indexOf(s);
+          var next = plan.scenes[idx + 1];
+          if (next && next.clip && remain <= 1.2 && remain >= 0) {
+            kickProxy(next.clip);
+            previewWarmNext(mediaPreviewUrl(next.clip), Number(next.inPoint) || 0, next.clip);
+          }
+        }
+        return;
+      }
+      var back = previewHidden();
+      var gen = ++previewSwapGen;
+      back.dataset.clip = s.clip;
+      back.muted = !!s.muted;
+      back.playbackRate = rate;
+      applyScenePreviewFx(s, back);
+      function reveal() {
+        if (gen !== previewSwapGen) return;
+        paintLive(back);
+        previewShow(back);
+        paintCaption();
+      }
+      if (back.dataset.loadedUrl === url && back.readyState >= 2 && back.videoWidth) {
+        waitReadyFrame(back, local, reveal);
+      } else {
+        back.dataset.loadedUrl = url;
+        back.dataset.warm = "";
+        back.src = url;
+        waitReadyFrame(back, local, reveal);
+      }
+    }
+
+    function updateHud() {
+      var d = plan.duration || 0;
+      $("timecode").textContent = clock(currentTime) + " / " + clock(d);
+      $("seekBar").value = d ? (currentTime / d) * 1000 : 0;
+    }
+
+    function playScene(i, autoplay) {
+      var s = plan.scenes[i];
+      if (!s) return;
+      selectedSceneIndex = i;
+      currentTime = s.timelineStart || 0;
+      cancelAnimationFrame(raf);
+      markSelectedScene(i);
+      isPlaying = !!autoplay && !!s.clip;
+      $("playBtn").textContent = isPlaying ? "⏸" : "▶";
+      if (!isPlaying) renderTools();
+      updateHud();
+      syncPreview(currentTime, isPlaying);
+      if (isPlaying) {
+        armPlayClock();
+        tick();
+        playVoWithPicture();
+        playMusicWithPicture();
+      } else {
+        previewPauseAll();
+        if (voFollowOn()) voPause();
+        musicPause();
+      }
+    }
+
+    function togglePlay() {
+      if (!plan.scenes.length) return;
+      isPlaying = !isPlaying;
+      $("playBtn").textContent = isPlaying ? "⏸" : "▶";
+      if (isPlaying) {
+        if (currentTime >= plan.duration - 0.05) currentTime = 0;
+        armPlayClock();
+        syncPreview(currentTime, true);
+        tick();
+        if (voFollowOn()) {
+          voFollowSceneIdx = -1;
+          playVoWithPicture();
+        }
+        playMusicWithPicture();
+      } else {
+        previewPauseAll();
+        cancelAnimationFrame(raf);
+        if (voFollowOn()) voPause();
+        musicPause();
+      }
+    }
+
+    function armPlayClock() {
+      playClockOrigin = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      playClockTime = Number(currentTime) || 0;
+      playSceneIdx = -1;
+    }
+    function playWallTime() {
+      var now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+      if (!playClockOrigin) return Number(currentTime) || 0;
+      var shuttle = (typeof assembleShuttle === "number" && assembleShuttle > 0) ? assembleShuttle : 1;
+      return playClockTime + Math.max(0, (now - playClockOrigin) / 1000) * shuttle;
+    }
+    function captionClock() {
+      if (isPlaying && typeof voFollowOn === "function" && voFollowOn()) {
+        var p = getVoPlayer();
+        if (p && !p.paused && isFinite(p.currentTime)) return p.currentTime;
+      }
+      return Number(currentTime) || 0;
+    }
+    function tick() {
+      if (!isPlaying) return;
+      currentTime = playWallTime();
+      var d = Number(plan.duration) || 0;
+      if (d && currentTime >= d - 0.02) {
+        currentTime = d;
+        isPlaying = false;
+        previewPauseAll();
+        $("playBtn").textContent = "\u25b6";
+        if (voFollowOn()) voStop();
+        musicPause();
+        paintCaption();
+        updateHud();
+        return;
+      }
+      var s = sceneAt(currentTime);
+      var idx = s ? plan.scenes.indexOf(s) : -1;
+      var video = previewLive();
+      if (idx >= 0 && idx !== selectedSceneIndex) markSelectedScene(idx);
+      if (idx !== playSceneIdx) {
+        playSceneIdx = idx;
+        syncPreview(currentTime, true);
+      } else if (s && video) {
+        if (s.freeze) { try { video.pause(); } catch (e1) {} }
+        else if (video.paused && !video.ended) video.play().catch(function () {});
+        applyScenePreviewFx(s, video);
+      }
+      paintCaption();
+      updateHud();
+      if (isPlaying) raf = requestAnimationFrame(tick);
+    }
+    function assignClip(index, name) {
+      var s = plan.scenes[index];
+      if (!s) return;
+      s.clip = fileName(name);
+      s.url = clipUrl(s.clip);
+      var d = clipDur(s.clip) || 4;
+      s.inPoint = 0;
+      s.outPoint = d;
+      rebuild();
+      selectedSceneIndex = index;
+      currentTime = s.timelineStart;
+      renderAll();
+      syncPreview(currentTime, false);
+    }
+
+    function sceneSplit() {
+      var s = active();
+      if (!s) return;
+      var local = currentTime - s.timelineStart;
+      if (local < 0.2 || local > sceneDur(s) - 0.2) return;
+      var cut = s.inPoint + local * (s.speed || 1);
+      var copy = makeScene(s.clip, 0);
+      copy.inPoint = cut;
+      copy.outPoint = s.outPoint;
+      copy.speed = s.speed;
+      copy.muted = s.muted;
+      copy.grade = normalizeGrade(s.grade);
+      s.outPoint = cut;
+      plan.scenes.splice(selectedSceneIndex + 1, 0, copy);
+      rebuild();
+      renderAll();
+      syncPreview(currentTime, false);
+    }
+
+    function sceneTrim(side) {
+      var s = active();
+      if (!s) return;
+      var local = currentTime - s.timelineStart;
+      var src = currentTime * (s.speed || 1) + (side === "start" ? 0 : 0);
+      var at = s.inPoint + local * (s.speed || 1);
+      if (side === "start") s.inPoint = Math.min(at, s.outPoint - 0.2);
+      else s.outPoint = Math.max(at, s.inPoint + 0.2);
+      rebuild();
+      currentTime = s.timelineStart;
+      renderAll();
+      syncPreview(currentTime, false);
+    }
+
+    function sceneRotate(delta) {
+      var s = active();
+      if (!s) return;
+      s.rotation = ((s.rotation || 0) + delta) % 360;
+      applyScenePreviewFx(s);
+      lockSave();
+    }
+
+    function sceneMute() {
+      var s = active();
+      if (!s) return;
+      s.muted = !s.muted;
+      renderTools();
+      syncPreview(currentTime, false);
+      lockSave();
+    }
+
+    function sceneToggleVo() {
+      var s = flushNarration() || active();
+      if (!s) return;
+      s.voiceover = !s.voiceover;
+      if (s.voiceover && !s.narration) s.narration = s.text || pretty(s.clip);
+      if (s.voiceover) s.duckOriginal = true;
+      renderTools();
+      lockSave();
+    }
+
+    function sceneToggleDuck() {
+      var s = active();
+      if (!s) return;
+      s.duckOriginal = !s.duckOriginal;
+      renderTools();
+      lockSave();
+    }
+
+    function invalidateVoCache() {
+      voAudioUrl = "";
+      voAudioSig = "";
+      var player = getVoPlayer();
+      player.pause();
+      try { player.removeAttribute("src"); } catch (e) {}
+      try { player.src = ""; } catch (e2) {}
+      try { player.load(); } catch (e3) {}
+    }
+    function applyFullVoVoice(patch) {
+      flushNarration();
+      var lead = voLeadScene() || active();
+      if (!lead && !(plan.scenes || []).length) return null;
+      var scenes = plan.scenes || [];
+      if (!scenes.length && lead) scenes = [lead];
+      scenes.forEach(function (s) {
+        if (!s) return;
+        if (patch.voiceStyle != null) s.voiceStyle = patch.voiceStyle;
+        if (patch.voiceName != null) s.voiceName = patch.voiceName;
+        if (patch.voFx != null) s.voFx = patch.voFx;
+        if (patch.voiceEngine != null) s.voiceEngine = patch.voiceEngine;
+        if (patch.voRate != null) s.voRate = patch.voRate;
+      });
+      return voLeadScene() || lead || scenes[0] || null;
+    }
+    function sceneSetVoiceStyle(v) {
+      if (!applyFullVoVoice({ voiceStyle: v || "documentary" })) return;
+      invalidateVoCache();
+      lockSave();
+    }
+    function sceneSetVoiceName(v) {
+      if (!applyFullVoVoice({ voiceName: v || "" })) return;
+      invalidateVoCache();
+      lockSave();
+    }
+    function sceneSetVoFx(v) {
+      if (!applyFullVoVoice({ voFx: v || "none" })) return;
+      invalidateVoCache();
+      lockSave();
+    }
+    function sceneSetVoiceEngine(v) {
+      if (!applyFullVoVoice({ voiceEngine: v === "eleven" ? "eleven" : "edge" })) return;
+      invalidateVoCache();
+      lockSave();
+    }
+    function sceneSetVoRate(v, commit) {
+      var rate = Math.max(0.5, Math.min(1.5, Number(v) || 1));
+      applyFullVoVoice({ voRate: rate });
+      var lbl = $("voRateLbl");
+      if (lbl) lbl.textContent = rate.toFixed(2) + "x";
+      if (commit) {
+        invalidateVoCache();
+        lockSave();
+      }
+    }
+
+    function activeCaptionStyle() {
+      for (var i = 0; i < CAP_STYLES.length; i++) if (CAP_STYLES[i].id === capSettings.style) return CAP_STYLES[i];
+      return CAP_STYLES[0];
+    }
+
+    function renderCapStyles() {
+      var box = $("capStyles");
+      if (!box) return;
+      box.innerHTML = CAP_STYLES.map(function (st) {
+        return '<button type="button" class="cap-style' + (st.id === capSettings.style ? " on" : "") + '" data-id="' + st.id + '">' + st.label + "</button>";
+      }).join("");
+      box.onclick = function (ev) {
+        var b = ev.target.closest("[data-id]");
+        if (!b) return;
+        applyCapStyle(b.getAttribute("data-id"));
+      };
+    }
+
+    function captionSize() {
+      var n = Number(capSettings.size);
+      if (!isFinite(n) || n <= 0) n = (activeCaptionStyle().size || 42);
+      return Math.max(22, Math.min(96, Math.round(n)));
+    }
+
+    function nearestCapSizeId(px) {
+      var best = CAP_SIZES[1];
+      var dist = 999;
+      CAP_SIZES.forEach(function (s) {
+        var d = Math.abs(s.px - px);
+        if (d < dist) { dist = d; best = s; }
+      });
+      return dist <= 4 ? best.id : "";
+    }
+
+    function renderCapSizes() {
+      var box = $("capSizes");
+      if (!box) return;
+      var px = captionSize();
+      var active = nearestCapSizeId(px);
+      box.innerHTML = CAP_SIZES.map(function (s) {
+        return '<button type="button" class="cap-size' + (s.id === active ? " on" : "") + '" data-size="' + s.px + '">' + s.label + "</button>";
+      }).join("");
+      box.onclick = function (ev) {
+        var b = ev.target.closest("[data-size]");
+        if (!b) return;
+        setCaptionSize(b.getAttribute("data-size"));
+      };
+    }
+
+    function setCaptionSize(px) {
+      capSettings.size = Math.max(22, Math.min(96, parseInt(px, 10) || 42));
+      var sl = $("capSize");
+      if (sl && String(sl.value) !== String(capSettings.size)) sl.value = String(capSettings.size);
+      var lbl = $("capSizeLbl");
+      if (lbl) lbl.textContent = capSettings.size + " px";
+      renderCapSizes();
+      paintCaption();
+      lockSave();
+    }
+
+    function hexToRgba(hex, a) {
+      var h = String(hex || "").replace("#", "");
+      if (h.length !== 6) return "";
+      var r = parseInt(h.slice(0, 2), 16);
+      var g = parseInt(h.slice(2, 4), 16);
+      var b = parseInt(h.slice(4, 6), 16);
+      if (![r, g, b].every(function (n) { return isFinite(n); })) return "";
+      return "rgba(" + r + "," + g + "," + b + "," + (a == null ? 0.85 : a) + ")";
+    }
+
+    function captionBgOn() {
+      return capSettings.bgOn !== false && !!(capSettings.highlight);
+    }
+
+    function renderCapBgs() {
+      var box = $("capBgs");
+      if (!box) return;
+      var on = captionBgOn();
+      var cur = (capSettings.highlight || "").toLowerCase();
+      box.innerHTML = CAP_BGS.map(function (bg) {
+        var active = bg.id === "none" ? !on : (on && cur === bg.color);
+        var sw = bg.color
+          ? '<span class="swatch" style="background:' + bg.color + '"></span>'
+          : "";
+        return '<button type="button" class="cap-bg' + (active ? " on" : "") + '" data-bg="' + bg.color + '">' + sw + bg.label + "</button>";
+      }).join("");
+      box.onclick = function (ev) {
+        var b = ev.target.closest("[data-bg]");
+        if (!b) return;
+        setCaptionBg(b.getAttribute("data-bg"));
+      };
+      var row = $("capBgOpacityRow");
+      if (row) row.style.display = on ? "flex" : "none";
+      var hi = $("capHighlight");
+      if (hi) {
+        hi.disabled = !on;
+        hi.style.opacity = on ? "1" : "0.35";
+        if (on && capSettings.highlight) hi.value = capSettings.highlight;
+      }
+      var lbl = $("capBgLbl");
+      if (lbl) {
+        var found = CAP_BGS.filter(function (bg) { return bg.id !== "none" && bg.color === cur; })[0];
+        lbl.textContent = on ? (found ? found.label : "Personalizado") : "Ninguno";
+      }
+    }
+
+    function setCaptionBg(color) {
+      color = String(color || "").trim();
+      if (!color) {
+        capSettings.bgOn = false;
+        capSettings.highlight = "";
+      } else {
+        if (color.charAt(0) !== "#") color = "#" + color;
+        capSettings.bgOn = true;
+        capSettings.highlight = color;
+      }
+      renderCapBgs();
+      paintCaption();
+      lockSave();
+    }
+
+    function setCaptionBgOpacity(v) {
+      capSettings.bgOpacity = Math.max(0.15, Math.min(1, Number(v) || 0.85));
+      var sl = $("capBgOpacity");
+      if (sl) sl.value = String(Math.round(capSettings.bgOpacity * 100));
+      var lbl = $("capBgOpacityLbl");
+      if (lbl) lbl.textContent = Math.round(capSettings.bgOpacity * 100) + "%";
+      if (capSettings.bgOn !== false && !capSettings.highlight) {
+        capSettings.highlight = "#000000";
+        capSettings.bgOn = true;
+      }
+      renderCapBgs();
+      paintCaption();
+      scheduleSave();
+    }
+
+    function applyCapStyle(id) {
+      var st = null;
+      for (var i = 0; i < CAP_STYLES.length; i++) if (CAP_STYLES[i].id === id) st = CAP_STYLES[i];
+      if (!st) return;
+      capSettings.style = st.id;
+      capSettings.color = st.color;
+      capSettings.font = st.font;
+      capSettings.size = st.size;
+      var c = $("capColor"); if (c) c.value = st.color;
+      renderCapStyles();
+      setCaptionBg(st.highlight || "");
+      setCaptionSize(st.size);
+    }
+
+    function syncCaptionToggle() {
+      var on = capSettings.on !== false;
+      capSettings.on = on;
+      var btn = $("capOnBtn");
+      if (btn) {
+        btn.textContent = "CC todas";
+        btn.classList.toggle("on", on);
+        btn.classList.toggle("off", !on);
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+      var panel = $("captionsPanel");
+      if (panel) panel.classList.toggle("cap-off", !on);
+      paintCaption();
+    }
+
+    function toggleCaptionsOn(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      capSettings.on = !capSettings.on;
+      syncCaptionToggle();
+      lockSave();
+    }
+
+    function syncSceneCapToggle() {
+      var s = active();
+      var btn = $("sceneCapOn");
+      if (!btn) return;
+      var on = !(s && s.capOff);
+      btn.textContent = "Esta escena";
+      btn.classList.toggle("on", on);
+      btn.classList.toggle("off", !on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+
+    function renderCueList() {
+      var box = $("capCueList");
+      if (!box) return;
+      var cues = capSettings.cues || [];
+      var t = Number(currentTime) || 0;
+      if (!cues.length) {
+        box.innerHTML = "";
+        return;
+      }
+      var holes = capOffWindows();
+      box.innerHTML = cues.map(function (c, i) {
+        var segs = timeInCapOff(t) ? [] : subtractCapOff(Number(c.start) || 0, Number(c.end) || 0, holes);
+        var on = segs.some(function (seg) { return t + 0.02 >= seg[0] && t < seg[1]; });
+        if (!on && i === 0 && t < Number(cues[0].start) && !timeInCapOff(t)) on = true;
+        return '<div class="cue-row' + (on ? " on" : "") + '"><span class="cue-t">' +
+          escapeHtml(formatCueStamp(c.start)) + '</span><span>' + escapeHtml(c.text || "") + "</span></div>";
+      }).join("");
+      var active = box.querySelector(".cue-row.on");
+      if (active && active.scrollIntoView) {
+        var top = active.offsetTop - box.clientHeight / 2;
+        if (Math.abs(box.scrollTop - top) > 40) box.scrollTop = Math.max(0, top);
+      }
+    }
+
+    function paintCaption() {
+      var box = $("textOverlays");
+      if (!box) return;
+      box.innerHTML = "";
+      renderCueList();
+      if (capSettings.on === false) return;
+      var t = captionClock();
+      if (timeInCapOff(t)) return;
+      var holes = capOffWindows();
+      var vis = null;
+      (capSettings.cues || []).forEach(function (c) {
+        var a = Number(c.start) || 0;
+        var b = Number(c.end) || 0;
+        subtractCapOff(a, b, holes).forEach(function (seg) {
+          if (t + 0.02 >= seg[0] && t < seg[1]) vis = { cue: c, start: seg[0], end: seg[1] };
+        });
+      });
+      if (!vis || !vis.cue || !vis.cue.text) return;
+      var sc = sceneCovering(t);
+      var st = activeCaptionStyle();
+      var el = document.createElement("div");
+      el.className = "cap-overlay";
+      el.textContent = vis.cue.text;
+      el.style.color = capSettings.color || st.color;
+      el.style.opacity = String(capSettings.opacity == null ? 1 : capSettings.opacity);
+      el.style.fontSize = captionSize() + "px";
+      if (captionBgOn()) {
+        el.style.background = hexToRgba(capSettings.highlight, capSettings.bgOpacity == null ? 0.85 : capSettings.bgOpacity);
+      } else {
+        el.style.background = "transparent";
+      }
+      var pos = (sc && sc.capPos) || capSettings.position || "lower-third";
+      if (pos === "top") el.style.top = "12%";
+      else if (pos === "center") el.style.top = "42%";
+      else if (pos === "bottom") el.style.bottom = "8%";
+      else { el.style.bottom = "16%"; }
+      box.appendChild(el);
+    }
+
+    function apiError(data, fallback) {
+      var d = data && data.detail;
+      if (typeof d === "string" && d) return d;
+      if (Array.isArray(d) && d.length) return d.map(function (x) { return x.msg || x; }).join(" ");
+      return fallback || "Error";
+    }
+
+    function parseClock(token) {
+      var raw = String(token || "").trim().replace(",", ".");
+      if (!raw) return null;
+      var m = raw.match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{1,2})(?:\.(\d{1,3}))?$/);
+      if (!m) {
+        var n = parseFloat(raw);
+        return isFinite(n) ? Math.max(0, n) : null;
+      }
+      var h = parseInt(m[1] || "0", 10);
+      var mi = parseInt(m[2] || "0", 10);
+      var s = parseInt(m[3] || "0", 10);
+      var ms = (m[4] || "0").padEnd(3, "0").slice(0, 3);
+      return h * 3600 + mi * 60 + s + parseInt(ms, 10) / 1000;
+    }
+
+    function formatCueStamp(t) {
+      t = Math.max(0, Number(t) || 0);
+      var m = Math.floor(t / 60);
+      var s = t - m * 60;
+      if (Math.abs(s - Math.round(s)) < 0.05) return m + ":" + String(Math.round(s)).padStart(2, "0");
+      var whole = Math.floor(s);
+      var tenth = Math.round((s - whole) * 10);
+      if (tenth === 10) { whole += 1; tenth = 0; }
+      return m + ":" + String(whole).padStart(2, "0") + "." + tenth;
+    }
+
+    function formatCuesTranscript(cues) {
+      return (cues || []).map(function (c) {
+        return formatCueStamp(c.start) + " " + (c.text || "");
+      }).join("\n");
+    }
+
+    function splitCaptionWindow(text, start, end, maxWords) {
+      var words = String(text || "").split(/\s+/).filter(Boolean);
+      if (!words.length) return [];
+      maxWords = maxWords || 6;
+      start = Number(start) || 0;
+      end = Math.max(start + 0.4, Number(end) || start + 1.5);
+      var chunks = [];
+      for (var i = 0; i < words.length; i += maxWords) chunks.push(words.slice(i, i + maxWords).join(" "));
+      var slice = (end - start) / chunks.length;
+      return chunks.map(function (ch, i) {
+        var a = start + i * slice;
+        var b = i === chunks.length - 1 ? end : start + (i + 1) * slice;
+        return { start: Math.round(a * 100) / 100, end: Math.round(b * 100) / 100, text: ch };
+      });
+    }
+
+    function parseTimestampedTranscript(raw, duration) {
+      var text = String(raw || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/<[^>]+>/g, " ").trim();
+      if (!text) return [];
+      if (/^WEBVTT/i.test(text)) text = text.replace(/^WEBVTT[^\n]*\n+/i, "");
+      var clock = "(?:(?:\\d{1,2}:)?\\d{1,2}:\\d{1,2}(?:[.,]\\d{1,3})?)";
+      var stampRe = new RegExp(
+        "^(?:[\\s\\[\\(\\{\\-–—\\*>•·\"']*(?:\\d+[\\.\\)]\\s+)?(?:[^\\d\\n:]{1,24}:\\s+)?)?(" + clock + ")" +
+        "(?:\\s*(?:-->|->|–|—|-|to)\\s*(" + clock + "))?(?:\\s*/\\s*" + clock + ")?\\s*[\\]\\):\\-–—]?\\s*(.*)$",
+        "i"
+      );
+      var events = [];
+      var cur = null;
+      text.split("\n").forEach(function (rawLine) {
+        var line = rawLine.trim();
+        if (!line || /^\d+$/.test(line) || /^WEBVTT/i.test(line) || /^NOTE/i.test(line) || /^STYLE/i.test(line)) return;
+        var m = line.match(stampRe);
+        if (m && parseClock(m[1]) != null) {
+          if (cur && (cur.text || "").trim()) events.push(cur);
+          cur = { start: parseClock(m[1]), end: m[2] ? parseClock(m[2]) : null, text: (m[3] || "").trim() };
+          return;
+        }
+        if (!cur) cur = { start: 0, end: null, text: line };
+        else cur.text = (cur.text ? cur.text + " " : "") + line;
+      });
+      if (cur && (cur.text || "").trim()) events.push(cur);
+      if (!events.length) {
+        events = [{ start: 0, end: null, text: text.replace(/\s+/g, " ").trim() }];
+      }
+      var dur = Number(duration) || 0;
+      events.forEach(function (ev, idx) {
+        if (ev.end == null) {
+          ev.end = idx + 1 < events.length
+            ? events[idx + 1].start
+            : ev.start + Math.max(1.4, Math.min(12, String(ev.text).split(/\s+/).length / 2.2));
+        }
+        if (dur && idx === events.length - 1) ev.end = Math.max(ev.end, dur);
+        if (ev.end <= ev.start) ev.end = ev.start + 1.2;
+      });
+      var cues = [];
+      events.forEach(function (ev) {
+        splitCaptionWindow(ev.text, ev.start, ev.end, 14).forEach(function (c) { cues.push(c); });
+      });
+      return cues;
+    }
+
+    function cuesFromPlainScript(raw, duration) {
+      var text = String(raw || "").trim();
+      if (!text) return [];
+      var parts = text.split(/[.!?…]+\s+|\n+/).map(function (s) { return s.trim(); }).filter(Boolean);
+      if (!parts.length) parts = [text];
+      var chunks = [];
+      parts.forEach(function (p) {
+        var words = p.split(/\s+/).filter(Boolean);
+        for (var i = 0; i < words.length; i += 6) chunks.push(words.slice(i, i + 6).join(" "));
+      });
+      if (!chunks.length) return [];
+      var dur = Math.max(1, Number(duration) || chunks.length * 2);
+      var slice = dur / chunks.length;
+      return chunks.map(function (ch, i) {
+        return {
+          start: Math.round(i * slice * 100) / 100,
+          end: Math.round((i === chunks.length - 1 ? dur : (i + 1) * slice) * 100) / 100,
+          text: ch
+        };
+      });
+    }
+
+    function isJunkTranscript(text) {
+      var t = String(text || "").trim();
+      if (!t) return true;
+      var names = (plan.scenes || []).map(function (s) { return pretty(s.clip).toLowerCase(); });
+      if (!names.length) return false;
+      var lines = t.split(/\n+/).map(function (s) {
+        return s.replace(/^\s*\d+:\d+(?:[.,]\d+)?\s*/, "").trim().toLowerCase();
+      }).filter(Boolean);
+      if (!lines.length) return true;
+      var hits = 0;
+      lines.forEach(function (ln) { if (names.indexOf(ln) >= 0) hits++; });
+      return hits === lines.length;
+    }
+
+    var transcriptTimer = null;
+    function onTranscriptInput() {
+      clearTimeout(transcriptTimer);
+      transcriptTimer = setTimeout(function () {
+        applyPastedTranscript($("capTranscript").value, false);
+      }, 280);
+    }
+
+    function applyPastedTranscript(text, force) {
+      var raw = String(text || "").trim();
+      if (!raw) return false;
+      if (!force && isJunkTranscript(raw)) return false;
+      var cues = parseTimestampedTranscript(raw, plan.duration || 0);
+      if (!cues.length) {
+        if (!force && raw.split(/\s+/).length < 4) return false;
+        cues = cuesFromPlainScript(raw, plan.duration || 60);
+      }
+      if (!cues.length) return false;
+      capSettings.cues = cues;
+      capSettings.on = true;
+      syncCaptionToggle();
+      var words = raw.split(/\s+/).filter(Boolean).length;
+      var st = $("capStatus");
+      if (st) st.textContent = cues.length + " líneas · " + words + " palabras pegadas";
+      paintCaption();
+      lockSave();
+      refineCaptionsFromServer(raw);
+      return true;
+    }
+
+    var refineTimer = null;
+    function refineCaptionsFromServer(raw) {
+      clearTimeout(refineTimer);
+      refineTimer = setTimeout(function () {
+        fetch("/api/create/captions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            language: capSettings.language || "es",
+            source: "transcript",
+            punctuation: capSettings.punctuation,
+            title_case: capSettings.titleCase,
+            show_profanity: capSettings.showProfanity,
+            transcript: raw,
+            idea: ($("idea") && $("idea").value) || "",
+            duration: plan.duration || 0,
+            clips: (plan.scenes || []).map(function (s) {
+              return {
+                src: clipUrl(s.clip),
+                inPoint: s.inPoint,
+                outPoint: s.outPoint,
+                timelineStart: s.timelineStart || 0,
+                narration: s.narration || s.text || "",
+                muted: !!s.muted
+              };
+            })
+          })
+        }).then(function (res) { return res.json(); }).then(function (data) {
+          if (!data || !data.cues || !data.cues.length) return;
+          capSettings.cues = data.cues;
+          capSettings.on = true;
+          syncCaptionToggle();
+          var st = $("capStatus");
+          if (st) st.textContent = data.cues.length + " líneas" + (data.note ? " · " + data.note : "");
+          paintCaption();
+          lockSave();
+        }).catch(function () {});
+      }, 450);
+    }
+
+    function applyVoCaptionPayload(data) {
+      if (!data) return false;
+      if (data.duration) voDuration = Number(data.duration) || voDuration;
+      if (data.words && data.words.length) voCapWords = data.words;
+      if (!(data.cues && data.cues.length)) return false;
+      voCapCues = data.cues;
+      capSettings.cues = data.cues;
+      var ta = $("capTranscript");
+      if (ta) ta.value = formatCuesTranscript(data.cues);
+      paintCaption();
+      return true;
+    }
+
+    function wordsToCues(words, maxChars, maxWords) {
+      maxChars = maxChars || 32;
+      maxWords = maxWords || 6;
+      var cues = [];
+      var buf = [];
+      var start = null;
+      var end = 0;
+      for (var i = 0; i < (words || []).length; i++) {
+        var w = words[i] || {};
+        var t = String(w.text || "").trim();
+        if (!t) continue;
+        var wst = Number(w.start) || 0;
+        if (start == null) start = wst;
+        else if (buf.length && (wst - end) > 0.75) {
+          cues.push({ start: start, end: end, text: buf.join(" ") });
+          buf = [t];
+          start = wst;
+          end = Number(w.end) || 0;
+          continue;
+        }
+        var nxt = buf.concat([t]).join(" ");
+        if (buf.length && (nxt.length > maxChars || buf.length >= maxWords)) {
+          cues.push({ start: start, end: end, text: buf.join(" ") });
+          buf = [t];
+          start = wst;
+        } else buf.push(t);
+        end = Number(w.end) || 0;
+      }
+      if (buf.length && start != null) cues.push({ start: start, end: end, text: buf.join(" ") });
+      return cues;
+    }
+
+    function setCapSourceNarration() {
+      capSettings.source = "narration";
+      var el = $("capSource");
+      if (el) el.value = "narration";
+    }
+
+    function applySyncedVoCues(cues, note) {
+      if (!cues || !cues.length) return false;
+      applyVoCaptionPayload({ cues: cues });
+      var st = $("capStatus");
+      if (st) st.textContent = cues.length + " líneas" + (note ? " · " + note : "");
+      lockSave();
+      return true;
+    }
+
+    function captionClipsPayload() {
+      return (plan.scenes || []).map(function (s) {
+        return {
+          src: clipUrl(s.clip),
+          inPoint: s.inPoint,
+          outPoint: s.outPoint,
+          timelineStart: s.timelineStart || 0,
+          narration: s.narration || s.text || "",
+          muted: !!s.muted
+        };
+      });
+    }
+
+    async function sequenceVoExists() {
+      if (voAudioUrl) return true;
+      if (voPlayerReady(getVoPlayer())) return true;
+      try {
+        var r = await fetch("/api/sequence/vo", { method: "HEAD", cache: "no-store" });
+        return !!r.ok;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    async function postNarrationCaptions() {
+      var player = getVoPlayer();
+      var liveDur = voPlayerReady(player) ? player.duration : 0;
+      var res = await fetch("/api/create/captions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language: capSettings.language,
+          source: "narration",
+          punctuation: capSettings.punctuation,
+          title_case: capSettings.titleCase,
+          show_profanity: capSettings.showProfanity,
+          transcript: "",
+          script: fullVoText(),
+          voUrl: voAudioUrl || "/api/sequence/vo",
+          voDuration: voDuration || liveDur || 0,
+          idea: ($("idea") && $("idea").value) || "",
+          duration: plan.duration || 0,
+          clips: captionClipsPayload()
+        })
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok) throw new Error(apiError(data, "No se pudo sincronizar"));
+      if (data.words && data.words.length) voCapWords = data.words;
+      if (!(data.cues && data.cues.length)) return false;
+      applyVoCaptionPayload(data);
+      var st = $("capStatus");
+      if (st) st.textContent = data.cues.length + " líneas" + (data.note ? " · " + data.note : "");
+      lockSave();
+      return true;
+    }
+
+    async function syncVoCaptions() {
+      var st = $("capStatus");
+      if (voSyncBusy) return false;
+      setCapSourceNarration();
+      if (!(plan.scenes && plan.scenes.length)) {
+        if (st) st.textContent = "Añade escenas primero.";
+        return false;
+      }
+      var text = fullVoText();
+      var sig = voSignature(voLeadScene(), text);
+      var cached = (voCapWords && voCapWords.length) ? wordsToCues(voCapWords) : (voCapCues && voCapCues.length ? voCapCues.slice() : []);
+      var lastEnd = 0;
+      if (cached.length) {
+        try { lastEnd = Number(cached[cached.length - 1].end) || 0; } catch (e0) { lastEnd = 0; }
+      }
+      var voDur = Number(voDuration) || 0;
+      var cacheOk = cached.length && voAudioSig === sig && (!voDur || Math.abs(lastEnd - voDur) < 0.8);
+      if (cacheOk) return applySyncedVoCues(cached, "alineadas a la VO");
+      voSyncBusy = true;
+      if (st) st.textContent = "Sincronizando…";
+      try {
+        if (await sequenceVoExists()) {
+          try {
+            if (await postNarrationCaptions()) return true;
+          } catch (e1) {
+            if (!text) throw e1;
+          }
+        }
+        if (text) {
+          await voPlay({ silent: true, noPlay: true, captionsOnly: true });
+          if (voCapCues && voCapCues.length) {
+            if (st) st.textContent = voCapCues.length + " líneas · alineadas a la VO";
+            return true;
+          }
+          if (st) st.textContent = "La VO no trajo tiempos de palabras.";
+          return false;
+        }
+        if (st) st.textContent = "No hay guion ni VO para sincronizar.";
+        return false;
+      } catch (e) {
+        if (st) st.textContent = e.message || "No se pudo sincronizar.";
+        return false;
+      } finally {
+        voSyncBusy = false;
+      }
+    }
+
+    async function generateCaptions() {
+      if (!plan.scenes.length) {
+        alert("Añade escenas primero.");
+        return false;
+      }
+      var ta = $("capTranscript");
+      var pasted = ta ? ta.value : "";
+      if (pasted && !isJunkTranscript(pasted)) {
+        var local = applyPastedTranscript(pasted, true);
+        if (local) {
+          var st0 = $("capStatus");
+          if (st0 && parseTimestampedTranscript(pasted).length) {
+            st0.textContent = capSettings.cues.length + " líneas · timestamps del texto";
+          }
+          return true;
+        }
+      }
+      var st = $("capStatus");
+      if (st) st.textContent = "Generando…";
+      if ($("capLang")) capSettings.language = $("capLang").value;
+      if ($("capSource")) capSettings.source = $("capSource").value;
+      if ($("capPunct")) capSettings.punctuation = $("capPunct").checked;
+      if ($("capTitle")) capSettings.titleCase = $("capTitle").checked;
+      if ($("capCurse")) capSettings.showProfanity = $("capCurse").checked;
+      var source = (pasted && !isJunkTranscript(pasted)) ? "transcript" : (capSettings.source || "original");
+      if (source === "narration") {
+        var voText = fullVoText();
+        var lead = voLeadScene();
+        var sig = voSignature(lead, voText);
+        if (voCapCues.length && voAudioSig === sig) {
+          capSettings.cues = voCapCues.slice();
+          if (ta) ta.value = formatCuesTranscript(capSettings.cues);
+          syncCaptionToggle();
+          paintCaption();
+          lockSave();
+          if (st) st.textContent = capSettings.cues.length + " líneas · alineadas a la VO";
+          return true;
+        }
+      }
+      try {
+        var player = voPlayer;
+        var liveDur = player && isFinite(player.duration) ? player.duration : 0;
+        var res = await fetch("/api/create/captions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            language: capSettings.language,
+            source: source,
+            punctuation: capSettings.punctuation,
+            title_case: capSettings.titleCase,
+            show_profanity: capSettings.showProfanity,
+            transcript: isJunkTranscript(pasted) ? "" : pasted,
+            script: source === "narration" ? fullVoText() : "",
+            voUrl: source === "narration" ? (voAudioUrl || "") : "",
+            voDuration: source === "narration" ? (voDuration || liveDur || 0) : 0,
+            idea: ($("idea") && $("idea").value) || "",
+            duration: plan.duration || 0,
+            clips: plan.scenes.map(function (s) {
+              return {
+                src: clipUrl(s.clip),
+                inPoint: s.inPoint,
+                outPoint: s.outPoint,
+                timelineStart: s.timelineStart || 0,
+                narration: s.narration || s.text || "",
+                muted: !!s.muted
+              };
+            })
+          })
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(apiError(data, "Error al generar captions"));
+        capSettings.on = true;
+        capSettings.cues = data.cues || [];
+        if (source === "narration" && capSettings.cues.length) voCapCues = capSettings.cues.slice();
+        syncCaptionToggle();
+        if (ta && isJunkTranscript(ta.value)) ta.value = data.text || formatCuesTranscript(capSettings.cues);
+        var n = capSettings.cues.length;
+        if (st) st.textContent = n + " líneas" + (data.note ? " · " + data.note : "");
+        paintCaption();
+        lockSave();
+        if (!n) throw new Error("No salieron líneas de captions.");
+        return true;
+      } catch (e) {
+        if (st) st.textContent = e.message;
+        return false;
+      }
+    }
+
+    function setVoStatus(transport) {
+      if (transport) voTransport = transport;
+      var el = $("elevenStatus");
+      if (!el) return;
+      el.textContent = voEdgeStatus + " · " + voTransport;
+    }
+    function getVoPlayer() {
+      if (voPlayer) return voPlayer;
+      voPlayer = new Audio();
+      voPlayer.addEventListener("playing", function () { setVoStatus("Reproduciendo"); });
+      voPlayer.addEventListener("pause", function () {
+        if (!voPlayer || voStopping) return;
+        if (voPlayer.currentTime > 0.05 && !voPlayer.ended) setVoStatus("En pausa");
+      });
+      voPlayer.addEventListener("ended", function () {
+        if (voPlayer) voPlayer.currentTime = 0;
+        setVoStatus("Detenido");
+      });
+      return voPlayer;
+    }
+    function getMusicPlayer() {
+      if (musicPlayer) return musicPlayer;
+      musicPlayer = new Audio();
+      musicPlayer.preload = "auto";
+      musicPlayer.loop = true;
+      musicPlayer.volume = Math.max(0, Math.min(1, musicVolume));
+      return musicPlayer;
+    }
+    function musicPayload() {
+      return {
+        url: "/api/sequence/music",
+        name: musicName || "",
+        volume: Math.max(0, Math.min(1, Number(musicVolume) || 0)),
+        mute: !!musicMute
+      };
+    }
+    function musicHasFile() {
+      return !!(musicUrl || musicName);
+    }
+    function renderMusicUi() {
+      var vol = $("musicVol");
+      if (vol) vol.value = String(Math.round((Number(musicVolume) || 0) * 100));
+      var lbl = $("musicVolLbl");
+      if (lbl) lbl.textContent = Math.round((Number(musicVolume) || 0) * 100) + "%";
+      var nameEl = $("musicNameLbl");
+      if (nameEl) nameEl.textContent = musicName || "";
+      var clr = $("musicClearBtn");
+      if (clr) clr.classList.toggle("hidden", !musicHasFile());
+    }
+    function seekMusicToTimeline() {
+      var player = getMusicPlayer();
+      function apply() {
+        var off = Math.max(0, Number(currentTime) || 0);
+        var dur = player.duration;
+        if (isFinite(dur) && dur > 0) {
+          try { player.currentTime = off % dur; } catch (e) {}
+        }
+      }
+      if (player.readyState >= 1 && isFinite(player.duration) && player.duration > 0) apply();
+      else player.addEventListener("loadedmetadata", apply, { once: true });
+    }
+    function playMusicWithPicture() {
+      if (musicMute || !musicHasFile()) return;
+      var player = getMusicPlayer();
+      if (!player.src || player.src.indexOf("/api/sequence/music") < 0) {
+        player.src = "/api/sequence/music?t=" + Date.now();
+        try { player.load(); } catch (e) {}
+      }
+      player.loop = true;
+      player.volume = Math.max(0, Math.min(1, musicVolume));
+      seekMusicToTimeline();
+      player.play().catch(function () {});
+    }
+    function musicPause() {
+      if (!musicPlayer) return;
+      musicPlayer.pause();
+    }
+    function musicFollowSeek() {
+      if (musicMute || !musicHasFile()) return;
+      seekMusicToTimeline();
+      if (isPlaying) {
+        var p = getMusicPlayer();
+        if (p.paused) p.play().catch(function () {});
+      }
+    }
+    function setMusicVolume(v, persist) {
+      musicVolume = Math.max(0, Math.min(1, Number(v) || 0));
+      if (musicPlayer) musicPlayer.volume = musicVolume;
+      renderMusicUi();
+      if (persist) lockSave();
+    }
+    async function pickSequenceMusic(input) {
+      var f = input && input.files && input.files[0];
+      if (input) input.value = "";
+      if (!f) return;
+      await uploadSequenceMusic(f);
+    }
+    async function uploadSequenceMusic(file) {
+      if (!file) return false;
+      var form = new FormData();
+      form.append("file", file);
+      try {
+        var res = await fetch("/api/sequence/music", { method: "PUT", body: form });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(apiError(data, "No se pudo subir la canción"));
+        musicUrl = data.url || "/api/sequence/music";
+        musicName = data.name || file.name || "canción";
+        musicMute = false;
+        var player = getMusicPlayer();
+        player.src = "/api/sequence/music?t=" + Date.now();
+        try { player.load(); } catch (e) {}
+        player.volume = musicVolume;
+        renderMusicUi();
+        lockSave();
+        if (isPlaying) playMusicWithPicture();
+        return true;
+      } catch (e) {
+        var el = $("musicNameLbl");
+        if (el) el.textContent = e.message || "Error";
+        return false;
+      }
+    }
+    async function clearSequenceMusic() {
+      try { await fetch("/api/sequence/music", { method: "DELETE" }); } catch (e) {}
+      musicPause();
+      musicUrl = "";
+      musicName = "";
+      musicMute = false;
+      if (musicPlayer) {
+        musicPlayer.removeAttribute("src");
+        try { musicPlayer.load(); } catch (e) {}
+      }
+      renderMusicUi();
+      lockSave();
+    }
+    function attachSavedMusic(music) {
+      music = music || {};
+      musicName = String(music.name || "");
+      musicVolume = Math.max(0, Math.min(1, Number(music.volume == null ? 0.25 : music.volume) || 0));
+      musicMute = !!music.mute;
+      musicUrl = musicName ? "/api/sequence/music" : "";
+      renderMusicUi();
+      if (!musicName) return Promise.resolve();
+      var player = getMusicPlayer();
+      player.src = "/api/sequence/music";
+      try { player.load(); } catch (e) {}
+      player.volume = musicVolume;
+      return Promise.resolve();
+    }
+    function fullVoText() {
+      var el = $("voScript");
+      if (el && (document.activeElement === el || voScriptDirty)) plan.script = el.value;
+      var t = (plan.script || "").trim();
+      if (t) return t;
+      return (plan.scenes || []).map(function (s) { return (s.narration || "").trim(); }).filter(Boolean).join("\n\n");
+    }
+    function voLeadScene() {
+      var scenes = plan.scenes || [];
+      for (var i = 0; i < scenes.length; i++) {
+        if (scenes[i].voiceover || (scenes[i].narration || "").trim()) return scenes[i];
+      }
+      return scenes[0] || active();
+    }
+    function voSignature(s, text) {
+      s = s || voLeadScene() || {};
+      return "full\x1f" + (text || "") + "\x1f" +
+        (s.voiceStyle || "documentary") + "\x1f" + (s.voiceName || "") + "\x1f" +
+        (s.voiceEngine || "edge") + "\x1f" + (s.voFx || "none") + "\x1f" +
+        (Number(s.voRate == null ? 1 : s.voRate) || 1);
+    }
+    function voCacheMatches() {
+      var sig = voSignature(voLeadScene(), fullVoText());
+      return !!(voAudioUrl && voAudioSig && sig && voAudioSig === sig);
+    }
+    function voFollowOn() {
+      var el = $("voFollowPlay");
+      return !!(el && el.checked);
+    }
+    function voSavedUrl(bust) {
+      return "/api/sequence/vo" + (bust ? ("?t=" + Date.now()) : "");
+    }
+    function voPlayerReady(player) {
+      return !!(player && player.readyState >= 1 && isFinite(player.duration) && player.duration > 0);
+    }
+    function armSavedVoSrc(bust) {
+      var player = getVoPlayer();
+      player.src = voSavedUrl(!!bust);
+      try { player.load(); } catch (e) {}
+      voAudioUrl = "/api/sequence/vo";
+      return player;
+    }
+    function seekVoToTimeline() {
+      var player = getVoPlayer();
+      function apply() {
+        var off = Math.max(0, Number(currentTime) || 0);
+        var dur = player.duration;
+        if (isFinite(dur) && dur > 0) off = Math.min(off, Math.max(0, dur - 0.04));
+        try { player.currentTime = off; } catch (e) {}
+      }
+      if (voPlayerReady(player)) apply();
+      else player.addEventListener("loadedmetadata", apply, { once: true });
+    }
+    function setVoFollowBox(on, persistRail) {
+      var box = $("voFollowPlay");
+      if (box) box.checked = !!on;
+      if (persistRail) {
+        var st = railState();
+        st.voFollow = !!on;
+        setRailState(st);
+      }
+    }
+    function setVoFollow(on) {
+      setVoFollowBox(on, true);
+      if (on) {
+        if (isPlaying) playVoWithPicture();
+      } else {
+        voPause();
+      }
+      lockSave();
+    }
+    function playVoWithPicture() {
+      if (!voFollowOn()) return;
+      if (!voCacheMatches()) {
+        voAudioUrl = "";
+        if (fullVoText()) voFollowStart();
+        return;
+      }
+      var player = getVoPlayer();
+      var didBust = false;
+      function goTts() {
+        voAudioUrl = "";
+        if (fullVoText()) voFollowStart();
+      }
+      function startAtPlayhead() {
+        if (!voFollowOn()) return;
+        seekVoToTimeline();
+        var p = player.play();
+        if (p && p.catch) p.catch(function () {
+          if (!didBust) {
+            didBust = true;
+            waitThenStart(true);
+            return;
+          }
+          goTts();
+        });
+      }
+      function waitThenStart(bust) {
+        if (bust) didBust = true;
+        armSavedVoSrc(bust);
+        var finished = false;
+        function ok() {
+          if (finished) return;
+          finished = true;
+          player.removeEventListener("loadedmetadata", ok);
+          player.removeEventListener("error", bad);
+          clearTimeout(timer);
+          if (isFinite(player.duration) && player.duration > 0) voDuration = player.duration;
+          startAtPlayhead();
+        }
+        function bad() {
+          if (finished) return;
+          finished = true;
+          player.removeEventListener("loadedmetadata", ok);
+          player.removeEventListener("error", bad);
+          clearTimeout(timer);
+          goTts();
+        }
+        var timer = setTimeout(bad, 4000);
+        if (voPlayerReady(player)) { ok(); return; }
+        player.addEventListener("loadedmetadata", ok);
+        player.addEventListener("error", bad);
+      }
+      if (voPlayerReady(player)) {
+        voAudioUrl = voAudioUrl || "/api/sequence/vo";
+        startAtPlayhead();
+        return;
+      }
+      waitThenStart(false);
+    }
+    async function voFollowStart() {
+      if (!voFollowOn() || voFollowBusy || !fullVoText()) return;
+      voFollowBusy = true;
+      try {
+        await voPlay({ follow: true, silent: true });
+      } finally {
+        voFollowBusy = false;
+      }
+    }
+    function voFollowSeek() {
+      if (!voFollowOn()) return;
+      var player = getVoPlayer();
+      if (voCacheMatches()) {
+        seekVoToTimeline();
+        if (isPlaying && player.paused) player.play().catch(function () {});
+        return;
+      }
+      if (!fullVoText()) {
+        if (!player.paused) voPause();
+        return;
+      }
+      if (isPlaying) voFollowStart();
+    }
+    async function voPlay(opts) {
+      opts = opts || {};
+      flushNarration();
+      var s = opts.scene || voLeadScene() || active();
+      var text = fullVoText();
+      var player = getVoPlayer();
+      var follow = !!opts.follow;
+      s = s || {};
+      var sig = voSignature(s, text);
+      if (voAudioUrl && voAudioSig === sig && !opts.captionsOnly && !opts.noPlay) {
+        if (!s.clip && !opts.silent && !voLeadScene()) {
+          alert("Selecciona una escena.");
+          return;
+        }
+        if (follow) {
+          var off = Math.max(0, Number(currentTime) || 0);
+          var dur = player.duration;
+          if (isFinite(dur) && dur > 0 && off >= dur - 0.05) {
+            player.pause();
+            return;
+          }
+          seekVoToTimeline();
+        } else if (player.ended || (player.duration && player.currentTime >= player.duration - 0.05)) {
+          player.currentTime = 0;
+        }
+        player.play().catch(function () {});
+        return;
+      }
+      if (!text) {
+        if (!opts.silent) alert("Pega el guion completo o escribe narración.");
+        return;
+      }
+      setVoStatus("Generando voz…");
+      try {
+        var res = await fetch("/api/eleven/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: text,
+            style: s.voiceStyle || "documentary",
+            voiceName: s.voiceName || "",
+            engine: s.voiceEngine || "edge",
+            voRate: Number(s.voRate == null ? 1 : s.voRate) || 1
+          })
+        });
+        var data = await res.json();
+        if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "TTS error");
+        voAudioSig = sig;
+        if (data.duration) voDuration = Number(data.duration) || voDuration;
+        var saved = !data.url || String(data.url).indexOf("/api/sequence/vo") === 0;
+        if (saved) {
+          armSavedVoSrc(true);
+        } else {
+          voAudioUrl = data.url;
+          player.src = data.url;
+          try { player.load(); } catch (e2) {}
+        }
+        if (!opts.noPlay) {
+          if (follow) seekVoToTimeline();
+          else player.currentTime = 0;
+          player.play().catch(function () {});
+          if (s && s.clip) s.voiceover = true;
+          renderTools();
+        }
+        applyVoCaptionPayload(data);
+        setVoStatus("VO lista");
+        lockSave();
+      } catch (e) {
+        setVoStatus(e.message || "Error");
+      }
+    }
+    function voPause() {
+      var player = getVoPlayer();
+      player.pause();
+      setVoStatus("En pausa");
+    }
+    function voStop() {
+      var player = getVoPlayer();
+      voStopping = true;
+      player.pause();
+      try { player.currentTime = 0; } catch (e) {}
+      setVoStatus("Detenido");
+      voStopping = false;
+    }
+    async function previewVo() { return voPlay(); }
+
+    async function loadElevenStatus() {
+      try {
+        var r = await fetch("/api/eleven/status");
+        var d = await r.json();
+        var eng = $("voiceEngineSel");
+        if (eng) eng.classList.toggle("hidden", !d.elevenlabs);
+        voEdgeStatus = d.elevenlabs
+          ? "Edge listo · ElevenLabs también (clave en .env)"
+          : "Edge listo (sin cuenta). Internet para generar VO.";
+        if (voAudioUrl) setVoStatus("VO lista");
+        else setVoStatus(voTransport || "Detenido");
+      } catch (e) {}
+    }
+
+    function sceneSetSpeed(v) {
+      var s = active();
+      if (!s) return;
+      s.speed = Math.max(0.5, Math.min(2, Number(v) || 1));
+      rebuild(true);
+      renderAll();
+    }
+    function sceneSetDuration(playSec, commit) {
+      var s = flushNarration() || active();
+      if (!s) return;
+      var speed = s.speed || 1;
+      var inn = Number(s.inPoint) || 0;
+      var maxPlay = scenePlayMax(s);
+      var d = Math.max(0.4, Math.min(maxPlay, Number(playSec) || 0.4));
+      var out = inn + d * speed;
+      var maxSrc = sceneSourceMax(s);
+      if (out > maxSrc) out = maxSrc;
+      if (out < inn + 0.2) out = inn + 0.2;
+      s.outPoint = Math.round(out * 100) / 100;
+      rebuild(true);
+      var end = s.timelineStart + sceneDur(s);
+      if (currentTime > end - 0.05) currentTime = Math.max(s.timelineStart, end - 0.05);
+      syncSceneDurSlider(s);
+      paintSceneDurLabels(s);
+      updateHud();
+      if (commit) {
+        syncPreview(currentTime, isPlaying);
+        lockSave();
+      } else scheduleSave();
+    }
+
+    function sceneSetNarration(v) {
+      var s = active();
+      if (!s) return;
+      s.narration = v;
+      voNarDirty = true;
+      lockSave();
+    }
+    function sceneSetCapOff(off) {
+      var s = flushNarration() || active();
+      if (!s) return;
+      s.capOff = !!off;
+      currentTime = Number(s.timelineStart) || 0;
+      syncSceneCapToggle();
+      updateHud();
+      syncPreview(currentTime, isPlaying);
+      paintCaption();
+      lockSave();
+    }
+    function sceneToggleCap(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      var s = flushNarration() || active();
+      if (!s) return;
+      sceneSetCapOff(!s.capOff);
+    }
+    function sceneSetCapPos(v) {
+      var s = flushNarration() || active();
+      if (!s) return;
+      var p = String(v || "").trim();
+      if (p !== "lower-third" && p !== "top" && p !== "bottom" && p !== "center") p = "";
+      s.capPos = p;
+      paintCaption();
+      lockSave();
+    }
+    function onVoScriptInput() {
+      var el = $("voScript");
+      if (!el) return;
+      plan.script = el.value;
+      voScriptDirty = true;
+      lockSave();
+    }
+    function splitScriptBlocks(text) {
+      var t = String(text || "").replace(/\r\n/g, "\n").trim();
+      if (!t) return [];
+      var numbered = t.split(/\n(?=\s*\d+[.)]\s+)/).map(function (b) {
+        return b.replace(/^\s*\d+[.)]\s+/, "").trim();
+      }).filter(Boolean);
+      if (numbered.length > 1) return numbered;
+      var paras = t.split(/\n\s*\n/).map(function (b) { return b.trim(); }).filter(Boolean);
+      return paras.length ? paras : [t];
+    }
+    function splitScriptSentences(text) {
+      return String(text || "").trim().split(/(?<=[\.!?…])\s+/).map(function (p) { return p.trim(); }).filter(Boolean);
+    }
+    function splitScriptToScenes() {
+      var scenes = plan.scenes || [];
+      if (!scenes.length) return;
+      var raw = (plan.script || "").trim();
+      if (!raw) return;
+      var durs = scenes.map(function (s) { return sceneDur(s); });
+      var blocks = splitScriptBlocks(raw);
+      var parts;
+      if (blocks.length === scenes.length) {
+        parts = blocks;
+      } else {
+        var sentences = splitScriptSentences(raw);
+        if (!sentences.length) return;
+        var weights = sentences.map(function (s) { return Math.max(1, s.split(/\s+/).length); });
+        var totalW = weights.reduce(function (a, b) { return a + b; }, 0) || 1;
+        var totalD = durs.reduce(function (a, d) { return a + Math.max(0.2, d); }, 0) || 1;
+        parts = [];
+        var si = 0;
+        for (var i = 0; i < scenes.length; i++) {
+          if (i === scenes.length - 1) {
+            parts.push(sentences.slice(si).join(" ").trim());
+            break;
+          }
+          var target = Math.max(1, Math.round(totalW * (Math.max(0.2, durs[i]) / totalD)));
+          var acc = 0;
+          var chunk = [];
+          while (si < sentences.length && (acc < target || !chunk.length)) {
+            chunk.push(sentences[si]);
+            acc += weights[si];
+            si++;
+            if (acc >= target) break;
+          }
+          parts.push(chunk.join(" ").trim());
+        }
+      }
+      scenes.forEach(function (s, i) {
+        var t = (parts[i] || "").trim();
+        if (!t) return;
+        s.narration = t;
+        s.voiceover = true;
+        s.duckOriginal = true;
+      });
+    }
+    function onVoScriptCommit() {
+      var el = $("voScript");
+      var prev = (plan.script || "").trim();
+      if (el) plan.script = el.value;
+      voScriptDirty = false;
+      splitScriptToScenes();
+      if ((plan.script || "").trim() !== prev) voAudioSig = "";
+      renderTools();
+      lockSave();
+    }
+
+    function sceneDup() {
+      var s = active();
+      if (!s) return;
+      var copy = makeScene(s.clip, 0);
+      copy.inPoint = s.inPoint;
+      copy.outPoint = s.outPoint;
+      copy.speed = s.speed;
+      copy.muted = s.muted;
+      copy.grade = normalizeGrade(s.grade);
+      copy.voiceover = s.voiceover;
+      copy.narration = s.narration;
+      copy.voiceStyle = s.voiceStyle;
+      copy.voiceName = s.voiceName || "";
+      copy.voiceEngine = s.voiceEngine || "edge";
+      copy.voFx = s.voFx || "none";
+      copy.voRate = Number(s.voRate == null ? 1 : s.voRate) || 1;
+      copy.duckOriginal = s.duckOriginal;
+      copy.capOff = !!s.capOff;
+      copy.capPos = s.capPos || "";
+      copy.freeze = !!s.freeze;
+      copy.fadeIn = !!s.fadeIn;
+      copy.fadeOut = !!s.fadeOut;
+      copy.duration = Number(s.duration) || copy.duration;
+      plan.scenes.splice(selectedSceneIndex + 1, 0, copy);
+      rebuild();
+      selectedSceneIndex = selectedSceneIndex + 1;
+      renderAll();
+    }
+
+    function sceneDelete() {
+      if (!active()) return;
+      plan.scenes.splice(selectedSceneIndex, 1);
+      selectedSceneIndex = plan.scenes.length ? Math.min(selectedSceneIndex, plan.scenes.length - 1) : null;
+      rebuild();
+      currentTime = active() ? active().timelineStart : 0;
+      renderAll();
+      if (plan.scenes.length) syncPreview(currentTime, false);
+      else {
+        previewPauseAll();
+        previewEls().forEach(function (v) {
+          v.removeAttribute("src");
+          try { v.load(); } catch (e) {}
+          v.dataset.clip = "";
+          v.dataset.loadedUrl = "";
+        });
+      }
+    }
+
+    function addEmptyScene() {
+      var name = (library[0] && library[0].name) || "";
+      addClipAsScene(name);
+    }
+
+    function reorder(from, to) {
+      if (from == null || from === to) return;
+      if (from < 0 || from >= plan.scenes.length) return;
+      var moved = plan.scenes.splice(from, 1)[0];
+      if (to >= plan.scenes.length) plan.scenes.push(moved);
+      else plan.scenes.splice(Math.max(0, to), 0, moved);
+      selectedSceneIndex = plan.scenes.indexOf(moved);
+      rebuild();
+      currentTime = moved.timelineStart;
+      renderAll();
+      syncPreview(currentTime, false);
+    }
+
+    function showHiddenClips() {
+      setHidden([]);
+      renderClips();
+    }
+
+    function openPreview(name) {
+      var c = libBy(name);
+      if (!c) return;
+      $("clipPreviewTitle").textContent = c.title || c.name;
+      var v = $("clipPreviewVideo");
+      v.src = clipUrl(c.name);
+      $("clipPreviewModal").classList.remove("hidden");
+      v.play().catch(function () {});
+    }
+    function closePreview() {
+      var v = $("clipPreviewVideo");
+      v.pause();
+      v.removeAttribute("src");
+      $("clipPreviewModal").classList.add("hidden");
+    }
+
+    function railState() {
+      var st = { clips: true, web: true, director: true, voFollow: false };
+      try { Object.assign(st, JSON.parse(localStorage.getItem(RAIL_KEY) || "{}")); } catch (e) {}
+      if (st.clips !== false) st.clips = true;
+      if (st.web !== false) st.web = true;
+      if (st.director !== false) st.director = true;
+      st.voFollow = st.voFollow === true;
+      return st;
+    }
+    function setRailState(st) {
+      try { localStorage.setItem(RAIL_KEY, JSON.stringify(st)); } catch (e) {}
+    }
+    function applyRail() {
+      var st = railState();
+      ["clips", "web", "director"].forEach(function (id) {
+        var body = $(id + "Body");
+        var chev = $(id + "Chevron");
+        var open = st[id] !== false;
+        if (body) body.classList.toggle("hidden", !open);
+        if (chev) chev.textContent = open ? "▾" : "▸";
+      });
+    }
+    function toggleRail(id) {
+      var st = railState();
+      st[id] = st[id] === false;
+      setRailState(st);
+      applyRail();
+    }
+    function isOsFileDrag(ev) {
+      var dt = ev.dataTransfer;
+      if (!dt) return false;
+      var types = dt.types ? [].slice.call(dt.types) : [];
+      for (var i = 0; i < types.length; i++) {
+        if (String(types[i]) === "Files" || String(types[i]).indexOf("application/x-moz-file") === 0) return true;
+      }
+      return false;
+    }
+    function classifyDropName(name, mime) {
+      var n = String(name || "").toLowerCase();
+      var t = String(mime || "").toLowerCase().split(";")[0].trim();
+      if (t.indexOf("image/") === 0) return "image";
+      if (/\.(jpe?g|png|webp|gif|bmp|jfif|tiff?)$/.test(n)) return "image";
+      if (t.indexOf("video/") === 0) return "video";
+      if (/\.(mp4|mov|webm|mkv|m4v|avi)$/.test(n)) return "video";
+      if (t.indexOf("audio/") === 0) return "audio";
+      if (/\.(mp3|wav|m4a|aac)$/.test(n)) return "audio";
+      return "";
+    }
+    function clipStatus(msg) {
+      var el = $("clipListHint");
+      if (el) el.textContent = msg;
+    }
+    function openClipsRail() {
+      var st = railState();
+      if (st.clips === false) {
+        st.clips = true;
+        setRailState(st);
+        applyRail();
+      }
+    }
+    function scrollClipRow(name) {
+      var box = $("clipList");
+      if (!box || !name) return;
+      var row = box.querySelector('.clip-row[data-name="' + encodeURIComponent(name) + '"]');
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+    }
+    function landClipInLibrary(data, originalName) {
+      if (!data || !data.filename) return;
+      var title = originalName || data.title || data.filename;
+      var row = {
+        name: data.filename,
+        title: title,
+        url: data.url || ("/clips/" + data.filename),
+        duration: data.duration || 4
+      };
+      library = (library || []).filter(function (c) { return c.name !== data.filename; });
+      library.unshift(row);
+    }
+    async function uploadDroppedFiles(fileList) {
+      var files = [].slice.call(fileList || []);
+      if (!files.length) return;
+      openClipsRail();
+      var ok = [];
+      var titles = {};
+      var bad = [];
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        var kind = classifyDropName(f.name, f.type);
+        if (!kind) {
+          bad.push((f.name || "archivo") + ": tipo no válido");
+          continue;
+        }
+        if (kind === "audio") {
+          clipStatus("Subiendo canción…");
+          var musOk = await uploadSequenceMusic(f);
+          if (musOk) ok.push(f.name || "canción");
+          else bad.push((f.name || "archivo") + ": no se pudo guardar la canción");
+          continue;
+        }
+        clipStatus("Subiendo " + (f.name || "archivo") + "…");
+        var form = new FormData();
+        form.append("file", f);
+        try {
+          var res = await fetch("/api/upload-media", { method: "POST", body: form });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(apiError(data, "No se pudo subir"));
+          if (!data.filename) throw new Error("El servidor no devolvió el archivo");
+          titles[data.filename] = f.name || data.title || data.filename;
+          landClipInLibrary(data, titles[data.filename]);
+          renderClips([data.filename]);
+          scrollClipRow(data.filename);
+          ok.push(data.filename);
+        } catch (e) {
+          bad.push((f.name || "archivo") + ": " + (e.message || "error"));
+        }
+      }
+      try {
+        await loadLibrary();
+        ok.forEach(function (name) {
+          var c = libBy(name);
+          if (c && titles[name]) c.title = titles[name];
+          else if (!c && titles[name]) {
+            library.unshift({ name: name, title: titles[name], url: "/clips/" + name, duration: 4 });
+          }
+        });
+      } catch (e) {}
+      if (ok.length) {
+        renderClips(ok);
+        scrollClipRow(ok[0]);
+        var shown = ok.map(function (n) { return titles[n] || n; });
+        clipStatus("Cayó en Clips: " + shown.join(", "));
+      }
+      if (bad.length) {
+        clipStatus((ok.length ? "Cayó en Clips: " + ok.map(function (n) { return titles[n] || n; }).join(", ") + ". " : "") + bad.join(" · "));
+      }
+    }
+    function bindClipOsDrop() {
+      var rail = $("createRail") || document.querySelector("aside");
+      var body = $("clipsBody");
+      function armOsDrag(ev) {
+        if (!isOsFileDrag(ev)) return false;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+        return true;
+      }
+      function onRailOver(ev) {
+        if (!armOsDrag(ev)) return;
+        openClipsRail();
+        if (body) body.classList.add("rail-drop");
+      }
+      function onRailLeave(ev) {
+        if (!body || !rail) return;
+        if (ev.relatedTarget && rail.contains(ev.relatedTarget)) return;
+        body.classList.remove("rail-drop");
+      }
+      function onRailDrop(ev) {
+        if (!isOsFileDrag(ev)) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (body) body.classList.remove("rail-drop");
+        openClipsRail();
+        var files = ev.dataTransfer && ev.dataTransfer.files;
+        if (files && files.length) uploadDroppedFiles(files);
+      }
+      if (rail) {
+        rail.addEventListener("dragover", onRailOver);
+        rail.addEventListener("dragleave", onRailLeave);
+        rail.addEventListener("drop", onRailDrop);
+      }
+      document.addEventListener("dragover", function (ev) {
+        if (!isOsFileDrag(ev)) return;
+        ev.preventDefault();
+        if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+        openClipsRail();
+        if (rail && rail.contains(ev.target)) return;
+        ev.stopPropagation();
+      }, true);
+      document.addEventListener("drop", function (ev) {
+        if (!isOsFileDrag(ev)) return;
+        ev.preventDefault();
+        if (body) body.classList.remove("rail-drop");
+        if (rail && rail.contains(ev.target)) return;
+        ev.stopPropagation();
+      }, true);
+    }
+
+    function bindUi() {
+      applyRail();
+      bindClipOsDrop();
+      $("clipList").addEventListener("click", function (ev) {
+        var hide = ev.target.closest(".clip-hide");
+        if (hide) {
+          ev.preventDefault();
+          var n = fileName(decodeURIComponent(hide.getAttribute("data-name") || ""));
+          var hid = hiddenList();
+          if (n && hid.indexOf(n) < 0) hid.push(n);
+          setHidden(hid);
+          renderClips();
+          return;
+        }
+        var prev = ev.target.closest(".clip-prev");
+        if (prev) {
+          ev.preventDefault();
+          openPreview(decodeURIComponent(prev.getAttribute("data-name") || ""));
+          return;
+        }
+        if (ev.target.closest("input")) return;
+        var row = ev.target.closest(".clip-row");
+        if (!row) return;
+        addClipAsScene(decodeURIComponent(row.getAttribute("data-name") || ""));
+      });
+      $("clipList").addEventListener("dragstart", function (ev) {
+        var row = ev.target.closest(".clip-row");
+        if (!row || ev.target.closest("input, button")) { ev.preventDefault(); return; }
+        dragClip = fileName(decodeURIComponent(row.getAttribute("data-name") || ""));
+        dragFrom = null;
+        ev.dataTransfer.effectAllowed = "copy";
+        try { ev.dataTransfer.setData("text/plain", dragClip); } catch (e) {}
+      });
+      $("clipList").addEventListener("mousedown", function (ev) {
+        var row = ev.target.closest(".clip-row");
+        if (row) row.setAttribute("draggable", "true");
+      });
+
+      $("sceneList").addEventListener("click", function (ev) {
+        if (ev.target.closest("#addSceneBtn") || ev.target.closest(".scene-add")) {
+          addEmptyScene();
+          return;
+        }
+        var play = ev.target.closest(".scene-play");
+        if (play) {
+          ev.stopPropagation();
+          playScene(Number(play.getAttribute("data-i")), true);
+          return;
+        }
+        var card = ev.target.closest(".scene-card");
+        if (!card || didDrag) return;
+        playScene(Number(card.getAttribute("data-i")), false);
+      });
+      $("sceneList").addEventListener("dragstart", function (ev) {
+        var card = ev.target.closest(".scene-card");
+        if (!card) return;
+        dragFrom = Number(card.getAttribute("data-i"));
+        dragClip = null;
+        didDrag = true;
+        card.classList.add("dragging");
+        ev.dataTransfer.effectAllowed = "move";
+        try { ev.dataTransfer.setData("text/plain", String(dragFrom)); } catch (e) {}
+      });
+      $("sceneList").addEventListener("dragover", function (ev) {
+        ev.preventDefault();
+        var el = ev.target.closest(".scene-card, .scene-add");
+        if (el) el.classList.add("drop-target");
+      });
+      $("sceneList").addEventListener("dragleave", function (ev) {
+        var el = ev.target.closest(".scene-card, .scene-add");
+        if (el) el.classList.remove("drop-target");
+      });
+      $("sceneList").addEventListener("drop", function (ev) {
+        ev.preventDefault();
+        var el = ev.target.closest(".scene-card, .scene-add");
+        document.querySelectorAll(".drop-target").forEach(function (n) { n.classList.remove("drop-target"); });
+        var cards = [].slice.call($("sceneList").querySelectorAll(".scene-card"));
+        var to = el && el.classList.contains("scene-add") ? plan.scenes.length : cards.indexOf(el);
+        if (to < 0) to = plan.scenes.length;
+        if (dragClip && dragFrom == null) {
+          addClipAsScene(dragClip, to);
+        } else {
+          reorder(dragFrom, to);
+        }
+        dragFrom = null;
+        dragClip = null;
+      });
+      $("sceneList").addEventListener("dragend", function () {
+        dragFrom = null;
+        dragClip = null;
+        setTimeout(function () { didDrag = false; }, 0);
+        document.querySelectorAll(".dragging").forEach(function (n) { n.classList.remove("dragging"); });
+      });
+
+      $("seekBar").addEventListener("input", function (e) {
+        if (!plan.duration) return;
+        currentTime = (e.target.value / 1000) * plan.duration;
+        var s = sceneAt(currentTime);
+        var idx = plan.scenes.indexOf(s);
+        if (idx >= 0 && idx !== selectedSceneIndex) {
+          markSelectedScene(idx);
+          if (!isPlaying) renderTools();
+        }
+        if (isPlaying) armPlayClock();
+        syncPreview(currentTime, isPlaying);
+        updateHud();
+        if (voFollowOn()) voFollowSeek();
+        musicFollowSeek();
+      });
+
+      document.addEventListener("keydown", function (e) {
+        var tag = (e.target.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select") return;
+        var k = e.key;
+        if (e.code === "Space") {
+          e.preventDefault();
+          assembleShuttle = 0;
+          assemblePaintShuttle();
+          if (assembleShuttleRaf) { cancelAnimationFrame(assembleShuttleRaf); assembleShuttleRaf = null; }
+          togglePlay();
+        }
+        else if (!e.ctrlKey && !e.metaKey && (k === "j" || k === "J")) { e.preventDefault(); assembleOnJ(); }
+        else if (!e.ctrlKey && !e.metaKey && (k === "k" || k === "K")) { e.preventDefault(); assembleSetShuttle(0); }
+        else if (!e.ctrlKey && !e.metaKey && (k === "l" || k === "L")) { e.preventDefault(); assembleOnL(); }
+        else if (!e.ctrlKey && !e.metaKey && (k === "c" || k === "C" || k === "s" || k === "S")) { e.preventDefault(); sceneSplit(); }
+        else if (!e.ctrlKey && !e.metaKey && (k === "q" || k === "Q")) { e.preventDefault(); sceneTrim("start"); }
+        else if (!e.ctrlKey && !e.metaKey && (k === "w" || k === "W")) { e.preventDefault(); sceneTrim("end"); }
+        else if (!e.ctrlKey && !e.metaKey && (k === "i" || k === "I")) { e.preventDefault(); assembleMarkIn = currentTime; }
+        else if (!e.ctrlKey && !e.metaKey && (k === "o" || k === "O")) { e.preventDefault(); assembleMarkOut = currentTime; }
+        else if (k === "Delete" || k === "Backspace") { e.preventDefault(); sceneDelete(); }
+      });
+    }
+
+    function assemblePaintShuttle() {
+      var el = $("shuttleBadge");
+      if (!el) return;
+      el.textContent = assembleShuttle ? ((assembleShuttle < 0 ? "◀ " : "▶ ") + Math.abs(assembleShuttle) + "x") : "";
+    }
+    function assembleSetShuttle(n) {
+      assembleShuttle = n;
+      assemblePaintShuttle();
+      var video = previewLive();
+      if (n === 0) {
+        if (assembleShuttleRaf) { cancelAnimationFrame(assembleShuttleRaf); assembleShuttleRaf = null; }
+        if (isPlaying) {
+          isPlaying = false;
+          $("playBtn").textContent = "▶";
+          previewPauseAll();
+          cancelAnimationFrame(raf);
+          if (voFollowOn()) voPause();
+          musicPause();
+        }
+        return;
+      }
+      if (assembleShuttle > 0) {
+        if (assembleShuttleRaf) { cancelAnimationFrame(assembleShuttleRaf); assembleShuttleRaf = null; }
+        if (video) {
+          var s = active() || sceneAt(currentTime);
+          video.playbackRate = ((s && s.speed) || 1) * assembleShuttle;
+        }
+        if (!isPlaying) togglePlay();
+      } else {
+        if (isPlaying) {
+          isPlaying = false;
+          $("playBtn").textContent = "▶";
+          previewPauseAll();
+          cancelAnimationFrame(raf);
+        }
+        assembleShuttleTs = performance.now();
+        if (!assembleShuttleRaf) assembleShuttleRaf = requestAnimationFrame(assembleReverseTick);
+      }
+    }
+    function assembleReverseTick(ts) {
+      if (assembleShuttle >= 0) { assembleShuttleRaf = null; return; }
+      var dt = Math.min(0.08, ((ts || performance.now()) - assembleShuttleTs) / 1000);
+      assembleShuttleTs = ts || performance.now();
+      currentTime = Math.max(0, currentTime + dt * assembleShuttle);
+      syncPreview(currentTime, false);
+      updateHud();
+      if (currentTime <= 0) { assembleSetShuttle(0); return; }
+      assembleShuttleRaf = requestAnimationFrame(assembleReverseTick);
+    }
+    function assembleOnJ() {
+      if (assembleShuttle > 0) assembleSetShuttle(0);
+      else if (assembleShuttle === 0) assembleSetShuttle(-1);
+      else assembleSetShuttle(Math.max(-4, assembleShuttle * 2));
+    }
+    function assembleOnL() {
+      if (assembleShuttle < 0) assembleSetShuttle(0);
+      else if (assembleShuttle === 0) assembleSetShuttle(1);
+      else assembleSetShuttle(Math.min(4, assembleShuttle === 1 ? 2 : 4));
+    }
+
+    function flushDocument() {
+      var full = $("voScript");
+      if (full) plan.script = full.value;
+      var nar = $("sceneNarration");
+      var s = active();
+      if (nar && s) {
+        s.narration = nar.value;
+        voNarDirty = false;
+      }
+      var ta = $("capTranscript");
+      if (ta && !isJunkTranscript(ta.value)) {
+        var parsed = parseTimestampedTranscript(ta.value, plan.duration || 0);
+        if (parsed && parsed.length) capSettings.cues = parsed;
+      }
+    }
+
+    function scheduleSave() {
+      if (restoring) return;
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveNow, 400);
+    }
+
+    function lockSave() {
+      if (restoring) return;
+      clearTimeout(saveTimer);
+      saveNow();
+    }
+
+    function saveNow() {
+      if (restoring) return false;
+      flushDocument();
+      var payload = {
+        savedAt: Date.now(),
+        rev: sequenceRev,
+        idea: $("idea").value || "",
+        fmt: $("fmt").value || "documentary",
+        dur: $("dur").value || "60",
+        exportName: $("exportName").value || "",
+        exportRes: $("exportRes").value || "720",
+        plan: plan,
+        selectedSceneIndex: selectedSceneIndex,
+        currentTime: currentTime,
+        chatHistory: chatHistory,
+        captions: capSettings,
+        vo: {
+          url: voAudioUrl || "/api/sequence/vo",
+          sig: voAudioSig || "",
+          duration: voDuration || 0,
+          follow: voFollowOn()
+        },
+        music: musicPayload()
+      };
+      if (!(plan.scenes && plan.scenes.length)) return false;
+      try { localStorage.setItem(SAVE_KEY, JSON.stringify(payload)); } catch (e) {}
+      var stamp = new Date(payload.savedAt);
+      var el = $("saveState");
+      if (el) el.textContent = "Guardando…";
+      fetch("/api/sequence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (d && d.sequence && d.sequence.rev != null) sequenceRev = Number(d.sequence.rev) || sequenceRev;
+          else if (d && d.rev != null) sequenceRev = Number(d.rev) || sequenceRev;
+          if (d && d.stale && d.sequence) {
+            if (el) el.textContent = "Disco mas nuevo · recargado";
+            restoring = true;
+            return Promise.resolve(restore(sequenceToAssemble(d.sequence))).then(function () {
+              restoring = false;
+            });
+          }
+          if (!r.ok || d.ok === false) {
+            if (el) el.textContent = "No se pudo guardar: " + apiError(d, "HTTP " + r.status);
+            return;
+          }
+          if (el) el.textContent = "Guardado " + stamp.toLocaleTimeString();
+        });
+      }).catch(function () {
+        if (el) el.textContent = "No se pudo guardar";
+      });
+      return true;
+    }
+
+    function manualSave() {
+      restoring = false;
+      if (!saveNow()) {
+        alert("Añade al menos una escena para guardar.");
+        return;
+      }
+      var btn = $("saveBtn");
+      if (btn) {
+        btn.textContent = "Guardado";
+        setTimeout(function () { btn.textContent = "Guardar"; }, 1200);
+      }
+    }
+
+    function sequenceToAssemble(seq) {
+      if (!seq) return null;
+      var ui = seq.ui || {};
+      return {
+        savedAt: seq.savedAt,
+        rev: seq.rev || 0,
+        idea: ui.idea || "",
+        fmt: ui.fmt || seq.format || "documentary",
+        dur: ui.dur || "60",
+        exportName: ui.exportName || seq.export_name || "",
+        exportRes: ui.exportRes || "720",
+        plan: {
+          title: seq.title || "Video",
+          summary: seq.summary || "",
+          format: seq.format || "youtube",
+          duration: seq.duration || 0,
+          script: seq.script || "",
+          scenes: seq.scenes || []
+        },
+        selectedSceneIndex: ui.selectedSceneIndex || 0,
+        currentTime: ui.currentTime || 0,
+        chatHistory: ui.chatHistory || [],
+        captions: ui.captions,
+        vo: ui.vo,
+        music: ui.music,
+        markers: seq.markers || [],
+        texts: seq.texts || []
+      };
+    }
+
+    function attachSavedVo(vo) {
+      vo = vo || {};
+      var explicitOff = vo.follow === false;
+      var currentSig = voSignature(voLeadScene(), fullVoText());
+      var storedSig = vo.sig || "";
+      voAudioSig = storedSig;
+      voDuration = Number(vo.duration) || 0;
+      if (storedSig && currentSig && storedSig !== currentSig) {
+        voAudioUrl = "";
+        invalidateVoCache();
+        voAudioSig = "";
+        if (explicitOff) setVoFollowBox(false, true);
+        else if (fullVoText() || vo.duration) setVoFollowBox(true, true);
+        return Promise.resolve();
+      }
+      var player = armSavedVoSrc(false);
+      function applyBox(hasFile) {
+        if (explicitOff) {
+          setVoFollowBox(false, true);
+          return;
+        }
+        if (vo.follow === true || hasFile || fullVoText() || vo.sig || voDuration) {
+          setVoFollowBox(true, true);
+        }
+      }
+      function armReady() {
+        var d = player.duration;
+        if (isFinite(d) && d > 0) voDuration = d;
+        voAudioUrl = "/api/sequence/vo";
+        applyBox(true);
+        setVoStatus("VO lista");
+      }
+      if (voPlayerReady(player)) {
+        armReady();
+        return Promise.resolve();
+      }
+      return new Promise(function (resolve) {
+        var done = false;
+        function finish(ok) {
+          if (done) return;
+          done = true;
+          player.removeEventListener("loadedmetadata", onOk);
+          player.removeEventListener("error", onBad);
+          clearTimeout(timer);
+          if (ok && voPlayerReady(player)) armReady();
+          else {
+            voAudioUrl = "";
+            applyBox(false);
+          }
+          resolve();
+        }
+        function onOk() { finish(true); }
+        function onBad() { finish(false); }
+        var timer = setTimeout(function () { finish(false); }, 4000);
+        player.addEventListener("loadedmetadata", onOk);
+        player.addEventListener("error", onBad);
+      });
+    }
+
+    async function restore(data) {
+      if (!data || !data.plan || !data.plan.scenes || !data.plan.scenes.length) return false;
+      if (data.rev != null) sequenceRev = Number(data.rev) || 0;
+      if (data.idea) $("idea").value = data.idea;
+      if (data.fmt) $("fmt").value = data.fmt;
+      if (data.dur) $("dur").value = data.dur;
+      if (data.exportName) $("exportName").value = data.exportName;
+      if (data.exportRes) $("exportRes").value = data.exportRes;
+      plan = data.plan;
+      plan.script = plan.script || "";
+      var vsEl = $("voScript");
+      if (vsEl && document.activeElement !== vsEl) vsEl.value = plan.script;
+      plan.scenes = (plan.scenes || []).map(function (s, i) {
+        var n = makeScene(s.clip, i);
+        n.url = s.src || s.url || n.url;
+        n.inPoint = Number(s.inPoint) || 0;
+        n.outPoint = Number(s.outPoint) || n.outPoint;
+        n.narration = s.narration || "";
+        n.text = s.text || "";
+        n.rotation = Number(s.rotation) || 0;
+        n.speed = Number(s.speed) || 1;
+        n.muted = !!s.muted;
+        n.crop = s.crop || null;
+        n.grade = normalizeGrade(s.grade);
+        n.voiceover = !!s.voiceover;
+        n.voiceStyle = s.voiceStyle || "documentary";
+        n.voiceEngine = s.voiceEngine === "eleven" ? "eleven" : "edge";
+        n.voiceName = s.voiceName || "";
+        n.voFx = s.voFx || "none";
+        n.voRate = Math.max(0.5, Math.min(1.5, Number(s.voRate == null ? 1 : s.voRate) || 1));
+        n.duckOriginal = !!s.duckOriginal;
+        n.capOff = !!s.capOff;
+        n.capPos = (s.capPos === "lower-third" || s.capPos === "top" || s.capPos === "bottom" || s.capPos === "center") ? s.capPos : "";
+        n.freeze = !!s.freeze;
+        n.fadeIn = !!s.fadeIn;
+        n.fadeOut = !!s.fadeOut;
+        n.duration = Number(s.duration) || n.duration;
+        n.timelineStart = Number(s.timelineStart) || 0;
+        n.order = i + 1;
+        return n;
+      });
+      rebuild();
+      selectedSceneIndex = Math.max(0, Math.min(Number(data.selectedSceneIndex) || 0, plan.scenes.length - 1));
+      currentTime = Math.max(0, Number(data.currentTime) || 0);
+      chatHistory = data.chatHistory || [];
+      if (data.captions) {
+        capSettings = Object.assign(capSettings, data.captions);
+        capSettings.on = data.captions.on !== false;
+        if ($("capSource") && capSettings.source) $("capSource").value = capSettings.source;
+        if (capSettings.size) setCaptionSize(capSettings.size);
+        else renderCapSizes();
+        if (data.captions.bgOn === false || capSettings.highlight === "") {
+          capSettings.bgOn = false;
+        } else if (capSettings.highlight) {
+          capSettings.bgOn = true;
+        }
+        renderCapBgs();
+        if (capSettings.bgOpacity != null) {
+          var bgo = $("capBgOpacity");
+          if (bgo) bgo.value = String(Math.round(Number(capSettings.bgOpacity) * 100));
+          var bgl = $("capBgOpacityLbl");
+          if (bgl) bgl.textContent = Math.round(Number(capSettings.bgOpacity) * 100) + "%";
+        }
+        var ta = $("capTranscript");
+        if (ta && capSettings.cues && capSettings.cues.length) ta.value = formatCuesTranscript(capSettings.cues);
+      }
+      voCapCues = (capSettings.cues && capSettings.cues.length) ? capSettings.cues.slice() : [];
+      renderAll();
+      syncCaptionToggle();
+      paintCaption();
+      var t0 = Math.max(0, Number(currentTime) || 0);
+      syncPreview(t0, false);
+      await attachSavedVo(data.vo || {});
+      await attachSavedMusic(data.music || {});
+      return true;
+    }
+
+    async function loadLibrary() {
+      var res = await fetch("/api/clips", { cache: "no-store" });
+      var data = await res.json();
+      library = data.clips || [];
+    }
+
+    function stockDurationCap(item) {
+      var d = Number(item && item.duration_sec);
+      if (!isFinite(d) || d <= 0) return 8;
+      return Math.max(4, Math.min(12, d));
+    }
+
+    function stockInPoint(item) {
+      var d = Number(item && item.duration_sec);
+      if (!isFinite(d) || d < 8) return 0.4;
+      return Math.min(4, d * 0.15);
+    }
+
+    function brollQueries() {
+      var seen = {};
+      var out = [];
+      function add(q) {
+        q = String(q || "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+        if (q.length < 3) return;
+        var k = q.toLowerCase();
+        if (seen[k]) return;
+        seen[k] = true;
+        out.push(q);
+      }
+      add((($("idea") && $("idea").value) || "") + " documentary footage");
+      (plan.scenes || []).slice(0, 3).forEach(function (s) {
+        add(pretty(s.clip) + " footage");
+        add(pretty(s.clip));
+      });
+      add("river water documentary footage");
+      add("environmental documentary footage");
+      return out;
+    }
+
+    var webKind = "video";
+    function setWebKind(kind) {
+      webKind = kind === "images" ? "images" : "video";
+      var v = $("webKindVideo");
+      var im = $("webKindImage");
+      if (v) v.classList.toggle("on", webKind === "video");
+      if (im) im.classList.toggle("on", webKind === "images");
+      var plat = $("stockPlat");
+      if (plat) plat.classList.toggle("hidden", webKind === "images");
+      var btn = $("webSearchBtn");
+      if (btn) btn.textContent = webKind === "images" ? "Buscar imágenes" : "Buscar video";
+      var q = $("stockQuery");
+      if (q) q.placeholder = webKind === "images" ? "Fotos: río sucio, fábrica…" : "Ríos, humo, ciudad…";
+    }
+    function isImageHit(it) {
+      return !!(it && (it.kind === "image" || it.platform === "image"));
+    }
+    function renderStockHits(items, query) {
+      var box = $("stockHits");
+      if (!box) return;
+      if (!items || !items.length) {
+        box.innerHTML = '<p class="text-[11px] text-neutral-500">Sin resultados para «' + escapeHtml(query || "") + '».</p>';
+        return;
+      }
+      box.innerHTML = items.map(function (it, i) {
+        var thumb = it.thumbnail
+          ? '<img src="' + escapeHtml(it.thumbnail) + '" alt="" referrerpolicy="no-referrer">'
+          : '<div style="width:72px;height:42px;background:#111;border-radius:4px"></div>';
+        var kind = isImageHit(it) ? (it.source || it.channel || "imagen") : (it.platform || "");
+        return '<div class="stock-card">' + thumb +
+          '<div class="min-w-0 flex-1">' +
+          '<div class="text-[11px] text-neutral-200 truncate">' + escapeHtml(it.title || (isImageHit(it) ? "Imagen" : "Clip")) + '</div>' +
+          '<div class="text-[10px] text-neutral-500">' + escapeHtml(kind) +
+          (it.duration ? " · " + escapeHtml(it.duration) : "") + '</div></div>' +
+          '<button type="button" class="tool stock-add" data-i="' + i + '">Añadir</button></div>';
+      }).join("");
+      box.querySelectorAll(".stock-add").forEach(function (btn) {
+        btn.onclick = function () {
+          var it = items[Number(btn.getAttribute("data-i"))];
+          if (!it) return;
+          if (isImageHit(it)) importImage(it, btn);
+          else importStock(it, btn);
+        };
+      });
+    }
+    function searchWeb() {
+      return webKind === "images" ? searchImages() : searchStock();
+    }
+
+    async function searchImages(q) {
+      var query = (q || ($("stockQuery") && $("stockQuery").value) || "").trim();
+      if (!query) query = ($("idea") && $("idea").value.trim()) || "";
+      if (!query) return alert("Escribe qué imagen quieres (ej: río contaminado, fábrica al atardecer).");
+      if ($("stockQuery") && !$("stockQuery").value.trim()) $("stockQuery").value = query;
+      setWebKind("images");
+      var st = $("stockStatus");
+      if (st) st.textContent = "Buscando imágenes de «" + query + "»…";
+      try {
+        var payload = { query: query, max_results: 12 };
+        var res = await fetch("/api/images/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        var data = await res.json().catch(function () { return {}; });
+        var hits = data.results || [];
+        if (hits.length) {
+          if (st) st.textContent = hits.length + " imágenes (" + (data.source || "web") + "). Añadir las convierte en stills en Clips.";
+          renderStockHits(hits, query);
+          return hits;
+        }
+        var err = apiError(data, data.error || "Error de búsqueda de imágenes");
+        if (st) st.textContent = err;
+        var box = $("stockHits");
+        if (box) box.innerHTML = '<p class="text-[11px] text-red-300">' + escapeHtml(err) + "</p>";
+        return [];
+      } catch (e) {
+        var msg = e.message || "Error de búsqueda de imágenes";
+        if (st) st.textContent = msg;
+        var box = $("stockHits");
+        if (box) box.innerHTML = '<p class="text-[11px] text-red-300">' + escapeHtml(msg) + "</p>";
+        return [];
+      }
+    }
+
+    async function importImage(item, btn) {
+      if (!item || !item.url) return null;
+      if (btn) { btn.disabled = true; btn.textContent = "…"; }
+      var st = $("stockStatus");
+      if (st) st.textContent = "Descargando imagen: «" + (item.title || "foto") + "»…";
+      try {
+        var res = await fetch("/api/images/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: item.url,
+            title: item.title || "imagen",
+            seconds: 4
+          })
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(apiError(data, "No se pudo importar la imagen"));
+        await loadLibrary();
+        renderClips(data.filename ? [data.filename] : []);
+        if (st) st.textContent = "Imagen en Clips: " + (data.filename || "still");
+        if (btn) btn.textContent = "Listo";
+        return data;
+      } catch (e) {
+        if (st) st.textContent = e.message;
+        if (btn) { btn.disabled = false; btn.textContent = "Añadir"; }
+        return null;
+      }
+    }
+
+    async function searchStock(q, plat) {
+      var query = (q || ($("stockQuery") && $("stockQuery").value) || "").trim();
+      if (!query) {
+        query = ($("idea") && $("idea").value.trim()) || "";
+      }
+      if (!query) return alert("Escribe qué footage quieres (ej: río contaminado, close-up humo).");
+      if ($("stockQuery") && !$("stockQuery").value.trim()) $("stockQuery").value = query;
+      plat = plat || ($("stockPlat") && $("stockPlat").value) || "youtube";
+      var st = $("stockStatus");
+      if (st) st.textContent = "Buscando «" + query + "»…";
+      try {
+        var res = await fetch("/api/stock/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: query, platform: plat, max_results: 8 })
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(apiError(data, "Error de búsqueda"));
+        var hits = data.results || [];
+        if (st) st.textContent = hits.length ? (hits.length + " en la web. Añade los que sirvan a Clips.") : "Nada encontrado en la web.";
+        renderStockHits(hits, query);
+        return hits;
+      } catch (e) {
+        if (st) st.textContent = e.message;
+        return [];
+      }
+    }
+
+    async function importStock(item, btn, opts) {
+      if (!item || !item.url) return null;
+      opts = opts || {};
+      if (btn) { btn.disabled = true; btn.textContent = "…"; }
+      var st = $("stockStatus");
+      if (st) st.textContent = "Descargando de " + (item.platform || "YouTube") + ": «" + (item.title || "clip") + "»…";
+      try {
+        var start = opts.start != null ? opts.start : stockInPoint(item);
+        var span = opts.span || 6;
+        var end = start + span;
+        if (item.duration_sec && end > item.duration_sec - 0.2) {
+          end = item.duration_sec;
+          if (end - start < 3) start = Math.max(0, end - 5);
+        }
+        var res = await fetch("/api/stock/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            video_id: item.video_id || "stock",
+            video_url: item.url,
+            title: item.title || "stock",
+            start: start,
+            end: end,
+            custom_name: "web_" + (item.title || "footage"),
+            remove_soft_subs: true
+          })
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(apiError(data, "No se pudo importar"));
+        await loadLibrary();
+        renderClips(data.filename ? [data.filename] : []);
+        if (st) st.textContent = "Guardado de " + (item.platform || "YouTube") + ": " + (data.filename || "clip");
+        if (btn) btn.textContent = "Listo";
+        return data;
+      } catch (e) {
+        if (st) st.textContent = e.message;
+        if (btn) { btn.disabled = false; btn.textContent = "Añadir"; }
+        return null;
+      }
+    }
+
+    async function fetchAndInsertStockBridges() {
+      var n = Math.min(3, plan.scenes.length);
+      var need = Math.max(0, n - 1);
+      if (!need) return "First scenes trimmed to 3s.";
+      var st = $("chatStatus");
+      var saved = [];
+      var queries = brollQueries();
+      var usedUrls = {};
+      for (var qi = 0; qi < queries.length && saved.length < need; qi++) {
+        if (st) st.textContent = "Buscando footage web (YouTube): " + queries[qi] + "…";
+        var hits = await searchStock(queries[qi], "youtube");
+        for (var hi = 0; hi < (hits || []).length && saved.length < need; hi++) {
+          var it = hits[hi];
+          if (!it || !it.url || usedUrls[it.url]) continue;
+          if (it.duration_sec && it.duration_sec < 6) continue;
+          usedUrls[it.url] = true;
+          if (st) st.textContent = "Guardando footage web " + (saved.length + 1) + "/" + need + " desde YouTube…";
+          var got = await importStock(it, null, { span: 6 });
+          if (got && got.filename) saved.push(got);
+        }
+      }
+      if (!saved.length) {
+        return "First 3 scenes are 3s. Could not download web footage. Search Web footage on the left, Add, then repeat.";
+      }
+      var out = [];
+      var si = 0;
+      plan.scenes.forEach(function (s, i) {
+        out.push(s);
+        if (i < n - 1 && si < saved.length) {
+          var br = makeScene(saved[si].filename, out.length);
+          var d = Number(saved[si].duration) || clipDur(saved[si].filename) || 6;
+          br.inPoint = 0;
+          br.outPoint = Math.min(3, Math.max(0.8, d));
+          out.push(br);
+          si++;
+        }
+      });
+      plan.scenes = out;
+      rebuild();
+      renderAll();
+      syncPreview(0, false);
+      return "First " + n + " scenes are 3s. Downloaded " + saved.length + " web-footage clip(s) from YouTube and placed them between those cuts.";
+    }
+
+    async function generatePlan() {
+      var idea = $("idea").value.trim();
+      if (!idea) return alert("Describe el video.");
+      var names = [].map.call(document.querySelectorAll(".clip-check:checked"), function (el) { return el.value; });
+      if (!names.length) names = library.map(function (c) { return c.name; });
+      if (!names.length) {
+        $("planStatus").textContent = "Sin clips. Busco footage web…";
+        await searchStock(idea, $("stockPlat") ? $("stockPlat").value : "youtube");
+        $("planStatus").textContent = "Elige footage web a la izquierda, Añadir, y vuelve a generar.";
+        $("chatPanel").classList.remove("hidden");
+        chatHistory.push({ role: "assistant", content: "No hay clips en tu librería. Busqué footage web de tu idea (YouTube). Añade 2–5 planos y genera el guion, o dime al Director qué quieres." });
+        renderChat();
+        return;
+      }
+      $("planBtn").disabled = true;
+      $("planStatus").textContent = "Escribiendo escenas…";
+      try {
+        var res = await fetch("/api/create/plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: idea,
+            format: $("fmt").value,
+            target_seconds: parseFloat($("dur").value),
+            clips: names,
+            language: "es"
+          })
+        });
+        var data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Error");
+        plan.title = data.title || "";
+        plan.summary = data.summary || "";
+        plan.scenes = (data.scenes || []).map(function (s, i) {
+          var n = makeScene(s.clip, i);
+          n.inPoint = Number(s.inPoint) || 0;
+          n.outPoint = Number(s.outPoint) || n.outPoint;
+          n.narration = s.narration || "";
+          n.text = s.text || "";
+          n.grade = normalizeGrade(s.grade);
+          return n;
+        });
+        rebuild();
+        selectedSceneIndex = 0;
+        currentTime = 0;
+        $("exportName").value = data.export_name || "mi_pelicula";
+        $("planSummary").textContent = data.summary || "Guion listo.";
+        $("planStatus").textContent = "Listo.";
+        chatHistory = [{ role: "assistant", content: "Guion listo. ¿Qué retocamos?" }];
+        renderChat();
+        renderAll();
+        syncPreview(0, false);
+      } catch (e) {
+        $("planStatus").textContent = "Error: " + e.message;
+      }
+      $("planBtn").disabled = false;
+    }
+
+    function renderChat() {
+      var log = $("chatLog");
+      log.innerHTML = (chatHistory || []).map(function (t) {
+        return '<div class="chat-bubble ' + (t.role === "user" ? "user" : "assistant") + '">' + escapeHtml(t.content || "") + "</div>";
+      }).join("");
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function showBrief() {
+      $("briefPanel").classList.remove("hidden");
+    }
+
+    function chatChip(text) {
+      $("chatInput").value = text;
+      sendDirectorChat();
+    }
+
+    async function applyDirectorMedia(data) {
+      if (!data) return false;
+      var changed = false;
+      var wantGenerate = false;
+      if (data.captions && typeof data.captions === "object") {
+        var c = data.captions;
+        if (c.on === false) capSettings.on = false;
+        if (c.on === true) capSettings.on = true;
+        if (c.style) applyCapStyle(c.style);
+        if (c.position) {
+          capSettings.position = c.position;
+          var p = $("capPos"); if (p) p.value = c.position;
+        }
+        if (c.color) { capSettings.color = c.color; var col = $("capColor"); if (col) col.value = c.color; }
+        if (c.highlight != null) { capSettings.highlight = c.highlight; var hi = $("capHighlight"); if (hi && c.highlight) hi.value = c.highlight; }
+        if (c.opacity != null) capSettings.opacity = Number(c.opacity);
+        if (c.source) {
+          capSettings.source = c.source;
+          var src = $("capSource"); if (src) src.value = c.source;
+        }
+        if (c.punctuation != null) { capSettings.punctuation = !!c.punctuation; var pu = $("capPunct"); if (pu) pu.checked = capSettings.punctuation; }
+        if (c.title_case != null) { capSettings.titleCase = !!c.title_case; var ti = $("capTitle"); if (ti) ti.checked = capSettings.titleCase; }
+        if (c.show_profanity != null) { capSettings.showProfanity = !!c.show_profanity; var cu = $("capCurse"); if (cu) cu.checked = capSettings.showProfanity; }
+        if (c.size != null) setCaptionSize(c.size);
+        if (c.bgOn === false || c.highlight === "") setCaptionBg("");
+        else if (c.highlight) setCaptionBg(c.highlight);
+        if (c.bgOpacity != null) setCaptionBgOpacity(c.bgOpacity);
+        paintCaption();
+        changed = true;
+        if (c.generate || (c.on === true && !(capSettings.cues && capSettings.cues.length))) wantGenerate = true;
+      }
+      if (data.voice && typeof data.voice === "object") {
+        var v = data.voice;
+        (plan.scenes || []).forEach(function (s) {
+          if (v.all === true) { s.voiceover = true; s.duckOriginal = true; if (!s.narration) s.narration = s.text || pretty(s.clip); }
+          if (v.all === false) s.voiceover = false;
+          if (v.style) s.voiceStyle = v.style;
+          if (v.duck === true) s.duckOriginal = true;
+          if (v.muteOriginal === true) s.muted = true;
+        });
+        renderTools();
+        changed = true;
+      }
+      if (wantGenerate) {
+        var ok = await generateCaptions();
+        changed = true;
+        data._captionsOk = ok;
+        data._captionsCount = (capSettings.cues || []).length;
+      }
+      if (changed) {
+        renderAll();
+        lockSave();
+      }
+      return changed;
+    }
+
+    function localMediaEdit(msg) {
+      var low = (msg || "").toLowerCase();
+      var captions = null;
+      var voice = null;
+      if (/caption|subtit|subt[ií]tul|\bcc\b|tama[nñ]o (de )?(la )?letra|letra (m[aá]s )?(grande|peque)|fontsize|fondo (de )?(los )?caption|sin fondo|highlight/.test(low)) {
+        var sizeOnly = /tama[nñ]o|letra|fontsize|\bpx\b|fondo|highlight|caja/.test(low) && !/genera|transcrib|pon captions|añade captions/.test(low);
+        captions = { on: true, generate: !sizeOnly };
+        if (/apaga|quita captions|sin captions|hide captions|oculta captions/.test(low)) {
+          captions = { on: false };
+        }
+        if (captions.on !== false) {
+          if (/narraci|guion hablado/.test(low)) captions.source = "narration";
+          if (/classic|cl[aá]sico/.test(low)) captions.style = "classic";
+          else if (/\bbold\b|negrita/.test(low)) captions.style = "bold";
+          else if (/retro/.test(low)) captions.style = "retro";
+          else if (/playful|jugueton/.test(low)) captions.style = "playful";
+          else if (/handwritten|manuscrit/.test(low)) captions.style = "handwritten";
+          else if (/bubble|burbuja/.test(low)) captions.style = "bubble";
+          else if (/modern/.test(low)) captions.style = "modern";
+          else if (/literature|literari/.test(low)) captions.style = "literature";
+          if (/lower.?third|tercio/.test(low)) captions.position = "lower-third";
+          else if (/arriba|\btop\b/.test(low)) captions.position = "top";
+          else if (/abajo|\bbottom\b/.test(low)) captions.position = "bottom";
+          else if (/centro|center/.test(low)) captions.position = "center";
+          var px = low.match(/(\d{2})\s*px/);
+          if (px) captions.size = Math.max(22, Math.min(96, parseInt(px[1], 10)));
+          else if (/\bxl\b|enorme|muy grande/.test(low)) captions.size = 64;
+          else if (/tama[nñ]o\s*l\b|letra grande|m[aá]s grande|large/.test(low)) captions.size = 48;
+          else if (/tama[nñ]o\s*s\b|letra peque|m[aá]s chiqu|small/.test(low)) captions.size = 28;
+          else if (/tama[nñ]o\s*m\b|mediano|medium/.test(low)) captions.size = 36;
+          if (/sin fondo|quita (el )?fondo|sin highlight|sin caja|no background|fondo off|ningun(o|a) fondo/.test(low)) {
+            captions.bgOn = false;
+            captions.highlight = "";
+          } else if (/fondo negro|black (box|bg)|highlight negro/.test(low)) {
+            captions.bgOn = true;
+            captions.highlight = "#000000";
+          } else if (/fondo amarillo|highlight amarillo|caja amarilla/.test(low)) {
+            captions.bgOn = true;
+            captions.highlight = "#facc15";
+          } else if (/fondo blanco|highlight blanco/.test(low)) {
+            captions.bgOn = true;
+            captions.highlight = "#ffffff";
+          } else if (/fondo rosa|highlight rosa/.test(low)) {
+            captions.bgOn = true;
+            captions.highlight = "#ec4899";
+          }
+        }
+      }
+      if ((/voiceover|voz en off|\bvo\b/.test(low)) && !(/escena|scene\s*#?\s*\d+/.test(low))) {
+        voice = {};
+        if (/quita|apaga|off|sin vo|desactiva/.test(low)) voice.all = false;
+        else voice.all = true;
+        if (/en[eé]rgic/.test(low)) voice.style = "energetic";
+        else if (/c[aá]lid|warm/.test(low)) voice.style = "warm";
+        else if (/\bad\b|anuncio/.test(low)) voice.style = "ad";
+        else if (/calm/.test(low)) voice.style = "calm";
+        else if (/documental|documentary/.test(low)) voice.style = "documentary";
+        if (/duck|baja el original/.test(low)) voice.duck = true;
+        if (/solo voz|silencia el original/.test(low)) voice.muteOriginal = true;
+      }
+      if (!captions && !voice) return null;
+      var parts = [];
+      if (captions) {
+        if (captions.on === false) parts.push("Captions apagados.");
+        else parts.push("Captions actualizados.");
+      }
+      if (voice) parts.push(voice.all === false ? "VO apagada." : "Voiceover ajustada.");
+      return { ok: true, reply: parts.join(" "), captions: captions, voice: voice };
+    }
+
+    function localGlobalEdit(msg) {
+      var low = (msg || "").toLowerCase();
+      if (!plan.scenes.length) return null;
+      function snap() { planUndo.push(JSON.parse(JSON.stringify(plan))); }
+      var capFirst = /f?irst\s*3\s*scenes|\b3\s*scenes|primeras?\s*3/.test(low);
+      var wants3 = /3\s*(s|sec|seconds?|seg)/.test(low);
+      var bridge = /web footage|footage web|from the web|online footage|stock (video|image|clip)|between (the )?cuts|entre (los )?cortes|b-?roll/.test(low);
+      if ((capFirst && wants3) || (wants3 && bridge) || (capFirst && bridge)) {
+        snap();
+        var n = Math.min(3, plan.scenes.length);
+        for (var i = 0; i < n; i++) {
+          var s = plan.scenes[i];
+          var inP = Number(s.inPoint) || 0;
+          var maxD = clipDur(s.clip) || sceneDur(s);
+          var cap = Math.min(3, Math.max(0.4, (maxD - inP) || 3));
+          s.outPoint = inP + cap;
+        }
+        rebuild();
+        renderAll();
+        return {
+          ok: true,
+          reply: "First " + n + " scenes capped at 3s. Pulling web footage from YouTube to put between the cuts…",
+          fetchBridges: true
+        };
+      }
+      if (/clip[s]?\s+enteros|usa cada clip|cada clip entero|full clips?|whole clips?/.test(low)) {
+        snap();
+        plan.scenes.forEach(function (s) {
+          var d = clipDur(s.clip) || sceneDur(s);
+          s.inPoint = 0;
+          s.outPoint = d;
+        });
+        rebuild();
+        renderAll();
+        return { ok: true, reply: "Cada escena usa el clip entero." };
+      }
+      var energetic = /en[eé]rgic|punch|impacto|din[aá]mic/.test(low);
+      var intro = /intro|inicio|primera|hook|gancho/.test(low);
+      if (energetic && (intro || !/(escena|scene)\s*#?\s*\d+/.test(low))) {
+        snap();
+        var s0 = plan.scenes[0];
+        var inP = Number(s0.inPoint) || 0;
+        if (sceneDur(s0) > 6) s0.outPoint = inP + 6;
+        s0.voiceStyle = "energetic";
+        if (!(s0.narration || "").trim()) s0.narration = pretty(s0.clip);
+        if (!(s0.text || "").trim()) s0.text = pretty(s0.clip).split(/\s+/).slice(0, 6).join(" ");
+        if (!intro) {
+          plan.scenes.forEach(function (s) { s.voiceStyle = "energetic"; });
+        }
+        rebuild();
+        renderAll();
+        return { ok: true, reply: "Intro más enérgico: plano 1 más corto, VO energetic y gancho en pantalla." };
+      }
+      if (/cierre|cta|llamada a la acci|call to action/.test(low)) {
+        snap();
+        var last = plan.scenes[plan.scenes.length - 1];
+        if (!(last.text || "").trim()) last.text = "Sígueme para más";
+        if (!(last.narration || "").trim()) last.narration = "Si te gustó, sígueme para más.";
+        last.textPosition = "center";
+        rebuild();
+        renderAll();
+        return { ok: true, reply: "Cierre con llamada a la acción en la última escena." };
+      }
+      if (/m[aá]s r[aá]pido|acelera|acorta (todo|el montaje|el video)|ritmo m[aá]s (alto|r[aá]pido)/.test(low)) {
+        snap();
+        plan.scenes.forEach(function (s) {
+          var inP = Number(s.inPoint) || 0;
+          s.outPoint = inP + Math.max(0.8, sceneDur(s) * 0.7);
+        });
+        rebuild();
+        renderAll();
+        return { ok: true, reply: "Ritmo más rápido: recorté cada escena un 30%." };
+      }
+      if (/m[aá]s lento|m[aá]s largo|alarga (todo|el montaje)|ritmo m[aá]s (bajo|lento)/.test(low)) {
+        snap();
+        plan.scenes.forEach(function (s) {
+          var d = clipDur(s.clip) || sceneDur(s);
+          s.inPoint = 0;
+          s.outPoint = d;
+        });
+        rebuild();
+        renderAll();
+        return { ok: true, reply: "Ritmo más amplio: cada escena usa el clip entero." };
+      }
+      return null;
+    }
+
+    async function localEdit(msg) {
+      var m = (msg || "").trim();
+      var low = m.toLowerCase();
+      if (/load all|cargar todos|todos los clips|clip[s]?.{0,40}(a |into |as |en )(escenas?|scenes?)|añade (todos )?los clips|add (all |the |selected )?clips|seleccionad.{0,20}(escena|scene)|escenas? (con|from|desde) (los )?clips/.test(low)) {
+        var n = loadSelectedAsScenes(true);
+        return { ok: true, reply: n ? (n + " clip(s) loaded as scenes.") : "No clips selected. Check clips on the left, then try again." };
+      }
+      if (/im[aá]genes?|images?|fotos?|photos?|stills?/.test(low) && /busca|search|encuentra|trae|necesito|quiero/.test(low)) {
+        var iq = m.replace(/busca(r)?|search|encuentra|trae|necesito|quiero|im[aá]genes?|images?|fotos?|photos?|stills?|de|del|para|the|of|online|web/gi, " ");
+        iq = iq.replace(/\s+/g, " ").trim() || (($("idea") && $("idea").value.trim()) || "documentary");
+        setWebKind("images");
+        $("chatStatus").textContent = "Buscando imágenes: " + iq;
+        await searchImages(iq);
+        return { ok: true, reply: "Imágenes de «" + iq + "». Elige a la izquierda y Añadir." };
+      }
+      var media = localMediaEdit(m);
+      if (media) {
+        await applyDirectorMedia(media);
+        if (media.captions && media.captions.on !== false) {
+          var n = (capSettings.cues || []).length;
+          media.reply += n ? (" " + n + " líneas.") : (" " + ($("capStatus") && $("capStatus").textContent || ""));
+        }
+        return media;
+      }
+      if (/\b(undo|deshacer)\b/.test(low)) {
+        if (!planUndo.length) return { ok: true, reply: "Nada que deshacer." };
+        planRedo.push(JSON.parse(JSON.stringify(plan)));
+        plan = planUndo.pop();
+        rebuild();
+        renderAll();
+        return { ok: true, reply: "Deshecho." };
+      }
+      var glob = localGlobalEdit(m);
+      if (glob && glob.fetchBridges) {
+        var more = await fetchAndInsertStockBridges();
+        glob.reply = more || glob.reply;
+        return glob;
+      }
+      if (glob) return glob;
+      var sm = m.match(/(?:escena|scene)\s*#?\s*(\d+)/i);
+      if (!sm) return null;
+      var idx = parseInt(sm[1], 10) - 1;
+      if (idx < 0 || idx >= plan.scenes.length) return { ok: true, reply: "No hay esa escena." };
+      var s = plan.scenes[idx];
+      var durM = m.match(/(\d+(?:[.,]\d+)?)\s*(?:s|seg)/i);
+      var secs = durM ? parseFloat(durM[1].replace(",", ".")) : NaN;
+      if (/(borra|elimina|quita|delete)/i.test(m)) {
+        planUndo.push(JSON.parse(JSON.stringify(plan)));
+        plan.scenes.splice(idx, 1);
+        rebuild();
+        renderAll();
+        return { ok: true, reply: "Escena eliminada." };
+      }
+      if (isFinite(secs)) {
+        planUndo.push(JSON.parse(JSON.stringify(plan)));
+        s.outPoint = (Number(s.inPoint) || 0) + Math.max(0.4, secs);
+        rebuild();
+        renderAll();
+        return { ok: true, reply: "Escena " + (idx + 1) + " ahora dura " + secs + "s." };
+      }
+      return null;
+    }
+
+    async function sendDirectorChat(ev) {
+      if (ev) ev.preventDefault();
+      var message = $("chatInput").value.trim();
+      if (!message) return;
+      chatHistory.push({ role: "user", content: message });
+      $("chatInput").value = "";
+      renderChat();
+      $("chatStatus").textContent = "Aplicando…";
+      var local = await localEdit(message);
+      if (local && local.ok) {
+        chatHistory.push({ role: "assistant", content: local.reply });
+        renderChat();
+        $("chatStatus").textContent = local.reply;
+        lockSave();
+        return;
+      }
+      $("chatStatus").textContent = "Pensando…";
+      $("chatSend").disabled = true;
+      var ctrl = new AbortController();
+      var timer = setTimeout(function () { ctrl.abort(); }, 70000);
+      try {
+        var res = await fetch("/api/create/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl.signal,
+          body: JSON.stringify({
+            message: message,
+            idea: $("idea").value || "",
+            format: $("fmt").value || "documentary",
+            language: "es",
+            clips: (function () {
+              var sel = selectedClipNames();
+              return sel.length ? sel : library.map(function (c) { return c.name; });
+            })(),
+            history: chatHistory.slice(-8),
+            plan: {
+              title: plan.title || "",
+              summary: plan.summary || "",
+              scenes: plan.scenes.map(function (s) {
+                return {
+                  clip: s.clip,
+                  inPoint: s.inPoint,
+                  outPoint: s.outPoint,
+                  narration: s.narration || "",
+                  text: s.text || "",
+                  voiceover: !!s.voiceover,
+                  voiceStyle: s.voiceStyle || "documentary",
+                  voiceEngine: s.voiceEngine || "edge",
+                  voiceName: s.voiceName || "",
+                  voFx: s.voFx || "none",
+                  voRate: Number(s.voRate == null ? 1 : s.voRate) || 1,
+                  duckOriginal: !!s.duckOriginal,
+                  capOff: !!s.capOff,
+                  capPos: s.capPos || "",
+                  freeze: !!s.freeze,
+                  duration: sceneDur(s),
+                  grade: normalizeGrade(s.grade),
+                  muted: !!s.muted,
+                  speed: s.speed || 1
+                };
+              })
+            },
+            captions: {
+              on: capSettings.on,
+              style: capSettings.style,
+              position: capSettings.position,
+              color: capSettings.color,
+              highlight: capSettings.highlight,
+              opacity: capSettings.opacity,
+              size: captionSize(),
+              bgOn: captionBgOn(),
+              bgOpacity: capSettings.bgOpacity,
+              source: capSettings.source,
+              punctuation: capSettings.punctuation,
+              title_case: capSettings.titleCase,
+              show_profanity: capSettings.showProfanity
+            }
+          })
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(apiError(data, "Error del director"));
+        chatHistory.push({ role: "assistant", content: data.reply || "Listo." });
+        renderChat();
+        if (data.plan && data.plan.scenes) {
+          planUndo.push(JSON.parse(JSON.stringify(plan)));
+          plan.scenes = data.plan.scenes.map(function (s, i) {
+            var n = makeScene(s.clip, i);
+            n.inPoint = Number(s.inPoint) || 0;
+            n.outPoint = Number(s.outPoint) || n.outPoint;
+            n.narration = s.narration || "";
+            n.text = s.text || "";
+            n.visual = s.visual || "";
+            n.textPosition = s.textPosition || "lower-third";
+            n.voiceover = !!s.voiceover;
+            n.voiceStyle = s.voiceStyle || "documentary";
+            n.voiceEngine = s.voiceEngine === "eleven" ? "eleven" : "edge";
+            n.voiceName = s.voiceName || "";
+            n.voFx = s.voFx || "none";
+            n.voRate = Math.max(0.5, Math.min(1.5, Number(s.voRate == null ? 1 : s.voRate) || 1));
+            n.duckOriginal = !!s.duckOriginal;
+            n.capOff = !!s.capOff;
+            n.capPos = (s.capPos === "lower-third" || s.capPos === "top" || s.capPos === "bottom" || s.capPos === "center") ? s.capPos : "";
+            n.freeze = !!s.freeze;
+            n.fadeIn = !!s.fadeIn;
+            n.fadeOut = !!s.fadeOut;
+            n.duration = Number(s.duration) || n.duration;
+            n.muted = !!s.muted;
+            n.grade = normalizeGrade(s.grade);
+            return n;
+          });
+          rebuild();
+          renderAll();
+          syncPreview(0, false);
+          loadLibrary().then(function () { renderClips(); }).catch(function () {});
+        }
+        await applyDirectorMedia(data);
+        if (data.search_images && data.search_images.query) {
+          $("chatStatus").textContent = "Buscando imágenes: " + data.search_images.query;
+          await searchImages(data.search_images.query);
+        }
+        if (data.search_stock && data.search_stock.query) {
+          $("chatStatus").textContent = "Buscando footage web: " + data.search_stock.query;
+          await searchStock(data.search_stock.query, data.search_stock.platform || "youtube");
+        }
+        $("chatStatus").textContent = data.reply || "";
+      } catch (e) {
+        var err = (e && e.name === "AbortError")
+          ? "El director tardó demasiado. Prueba de nuevo, o busca footage web a la izquierda."
+          : ("Error: " + (e.message || e));
+        chatHistory.push({ role: "assistant", content: err });
+        renderChat();
+        $("chatStatus").textContent = err;
+      }
+      clearTimeout(timer);
+      $("chatSend").disabled = false;
+    }
+
+    function captionExportTexts() {
+      if (!capSettings.on || !(capSettings.cues && capSettings.cues.length)) return [];
+      var st = activeCaptionStyle();
+      var holes = capOffWindows();
+      var out = [];
+      (capSettings.cues || []).forEach(function (c) {
+        var text = c.text || "";
+        if (!text) return;
+        var start = Number(c.start) || 0;
+        var end = Number(c.end) || start + 0.4;
+        subtractCapOff(start, end, holes).forEach(function (seg) {
+          if (timeInCapOff(seg[0])) return;
+          var sc = sceneCovering(seg[0]);
+          var pos = (sc && sc.capPos) || capSettings.position || "lower-third";
+          out.push({
+            content: text,
+            start: seg[0],
+            end: seg[1],
+            position: pos,
+            size: captionSize(),
+            color: (capSettings.color || "#ffffff").replace("#", ""),
+            highlight: captionBgOn() ? (capSettings.highlight || "").replace("#", "") : "",
+            boxOpacity: capSettings.bgOpacity == null ? 0.85 : capSettings.bgOpacity,
+            opacity: capSettings.opacity == null ? 1 : capSettings.opacity,
+            font: st.font || capSettings.font || "sans"
+          });
+        });
+      });
+      return out;
+    }
+
+    var exportBusy = false;
+
+    async function runExportJob(payload, onProgress) {
+      function tick(pct, label) { if (onProgress) onProgress(pct, label); }
+      var startRes = await fetch("/api/export/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (startRes.status === 404) {
+        tick(8, "Renderizando con FFmpeg…");
+        var pct = 8;
+        var fake = setInterval(function () {
+          pct = Math.min(90, pct + 3);
+          tick(pct, "Renderizando con FFmpeg…");
+        }, 900);
+        try {
+          var res = await fetch("/api/export", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          });
+          var d = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(apiError(d, "Error al exportar"));
+          tick(100, "Listo");
+          return d;
+        } finally {
+          clearInterval(fake);
+        }
+      }
+      var startData = await startRes.json().catch(function () { return {}; });
+      if (!startRes.ok) throw new Error(apiError(startData, "No se pudo empezar el render"));
+      var jobId = startData.job_id;
+      if (!jobId) throw new Error("El servidor no devolvió el trabajo");
+      tick(4, "Renderizando " + (startData.scenes || (payload.clips || []).length) + " escena(s)…");
+      for (;;) {
+        await new Promise(function (r) { setTimeout(r, 450); });
+        var stRes = await fetch("/api/export/jobs/" + encodeURIComponent(jobId), { cache: "no-store" });
+        var st = await stRes.json().catch(function () { return {}; });
+        if (!stRes.ok) throw new Error(apiError(st, "Se perdió el progreso del render"));
+        tick(st.pct, st.label || "Renderizando…");
+        if (st.status === "done") return st;
+        if (st.status === "error") throw new Error(st.message || st.label || "Error al exportar");
+      }
+    }
+
+    function setExportProgress(pct, label) {
+      pct = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+      var bar = $("exportBar");
+      if (bar) bar.style.width = pct + "%";
+      var n = $("exportPct");
+      if (n) n.textContent = pct + "%";
+      var st = $("exportStatus");
+      if (st && label) st.textContent = label;
+    }
+
+    function assembleVideo() {
+      if (exportBusy) {
+        $("exportOverlay").classList.remove("hidden");
+        return;
+      }
+      if (!plan.scenes.length) return alert("Añade al menos una escena.");
+      if (plan.scenes.some(function (s) { return !s.clip; })) return alert("Hay escenas sin clip.");
+      $("exportForm").classList.remove("hidden");
+      $("exportProgressWrap").classList.add("hidden");
+      $("exportLink").classList.add("hidden");
+      var closeBtn = $("exportCloseBtn");
+      if (closeBtn) closeBtn.classList.remove("hidden");
+      $("exportOverlay").classList.remove("hidden");
+      setExportProgress(0, "Listo para renderizar");
+    }
+
+    function closeExport() {
+      if (exportBusy) return;
+      $("exportOverlay").classList.add("hidden");
+    }
+
+    async function startExport() {
+      if (exportBusy) return;
+      exportBusy = true;
+      $("exportForm").classList.add("hidden");
+      $("exportProgressWrap").classList.remove("hidden");
+      $("exportLink").classList.add("hidden");
+      var closeBtn = $("exportCloseBtn");
+      if (closeBtn) closeBtn.classList.add("hidden");
+      setExportProgress(2, "Enviando montaje…");
+      try {
+        var payload = {
+          name: $("exportName").value.trim() || "pelicula",
+          resolution: $("exportRes").value,
+          clips: plan.scenes.map(function (s) {
+            return {
+              src: clipUrl(s.clip),
+              inPoint: s.inPoint,
+              outPoint: s.outPoint,
+              timelineStart: s.timelineStart,
+              duration: sceneDur(s),
+              speed: s.speed || 1,
+              volume: s.muted ? 0 : 1,
+              muted: !!s.muted,
+              rotation: s.rotation || 0,
+              crop: s.crop || undefined,
+              fadeIn: !!s.fadeIn,
+              fadeOut: !!s.fadeOut,
+              freeze: !!s.freeze,
+              voiceover: !!s.voiceover,
+              narration: s.narration || "",
+              voiceStyle: s.voiceStyle || "documentary",
+              duckOriginal: !!s.duckOriginal,
+              voiceEngine: s.voiceEngine || "edge",
+              voiceName: s.voiceName || "",
+              voFx: s.voFx || "none",
+              voRate: Number(s.voRate == null ? 1 : s.voRate) || 1,
+              grade: normalizeGrade(s.grade)
+            };
+          }),
+          texts: captionExportTexts(),
+          script: plan.script || ""
+        };
+        var data = await runExportJob(payload, setExportProgress);
+        setExportProgress(100, "Listo: " + (data.filename || "MP4"));
+        var a = $("exportLink");
+        a.href = data.path;
+        a.classList.remove("hidden");
+        if (closeBtn) closeBtn.classList.remove("hidden");
+      } catch (e) {
+        setExportProgress(0, "Error: " + e.message);
+        var hint = $("exportHint");
+        if (hint) hint.textContent = "Prueba de nuevo. Si el archivo es largo, el recorte tarda más.";
+        if (closeBtn) closeBtn.classList.remove("hidden");
+      }
+      exportBusy = false;
+    }
+
+    async function boot() {
+      bindUi();
+      renderCapStyles();
+      renderCapSizes();
+      renderCapBgs();
+      loadElevenStatus();
+      restoring = true;
+      try { await loadLibrary(); } catch (e) { console.error(e); }
+      var incoming = incomingNames();
+      incoming.forEach(function (n) {
+        if (!libBy(n)) library.unshift({ name: n, title: pretty(n), duration: null, size_mb: "—" });
+      });
+      var hid = hiddenList().filter(function (h) { return incoming.indexOf(h) < 0; });
+      setHidden(hid);
+
+      var local = loadSavedProject();
+      var diskSeq = null;
+      try {
+        var rs = await fetch("/api/sequence", { cache: "no-store" });
+        var ds = await rs.json();
+        if (ds && ds.ok && ds.sequence && (ds.sequence.scenes || []).length) diskSeq = ds.sequence;
+      } catch (e) {}
+      if (diskSeq) await restore(sequenceToAssemble(diskSeq));
+      else {
+        var disk = null;
+        try {
+          var r = await fetch("/api/create/autosave", { cache: "no-store" });
+          var d = await r.json();
+          disk = d && d.saved;
+        } catch (e) {}
+        await restore(pickSaved(local, disk));
+      }
+      renderClips(incoming);
+
+      if (incoming.length) {
+        var hint = $("clipListHint");
+        if (hint) hint.textContent = incoming.length + " clip(s) nuevos arriba. Clic para convertirlos en escena.";
+        $("saveState").textContent = "Clips recibidos · el montaje no se tocó";
+        try { localStorage.removeItem("pvs-create-incoming"); } catch (e) {}
+        fetch("/api/create/incoming/ack", { method: "POST" }).catch(function () {});
+        try { history.replaceState(null, "", "/create"); } catch (e) {}
+      }
+      restoring = false;
+      updateMain();
+      if (plan.scenes && plan.scenes.length) saveNow();
+    }
+
+    window.addEventListener("pagehide", saveNow);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "hidden") saveNow();
+    });
+    boot().catch(function (e) {
+      console.error(e);
+      $("saveState").textContent = "Error: " + e.message;
+    });
+  </script>
+</body>
+</html>
