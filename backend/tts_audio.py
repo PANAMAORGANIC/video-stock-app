@@ -414,18 +414,50 @@ def _atempo_vo_file(dest: Path, vo_rate: float) -> Tuple[bool, str]:
     return True, str(dest)
 
 
-def _make_silence_mp3(dest: Path, seconds: float) -> Tuple[bool, str]:
+def _probe_audio_format(path: Path) -> Tuple[int, str]:
+    """Sample rate and channel layout of a spoken TTS file."""
+    try:
+        from video_tools import get_video_info
+        info = get_video_info(Path(path))
+        for st in info.get("streams") or []:
+            if st.get("codec_type") != "audio":
+                continue
+            try:
+                rate = int(float(st.get("sample_rate") or 0))
+            except (TypeError, ValueError):
+                rate = 0
+            layout = str(st.get("channel_layout") or "mono")
+            if rate > 0:
+                return rate, layout if layout in {"mono", "stereo"} else "mono"
+    except Exception:
+        pass
+    return 24000, "mono"
+
+
+def _make_silence_mp3(
+    dest: Path,
+    seconds: float,
+    sample_rate: int = 24000,
+    channel_layout: str = "mono",
+) -> Tuple[bool, str]:
     from video_tools import ffmpeg_bin, _run
     ff = ffmpeg_bin()
     if not ff:
         return False, "FFmpeg no disponible"
     sec = parse_pausa_seconds(seconds)
+    try:
+        rate = int(sample_rate or 24000)
+    except (TypeError, ValueError):
+        rate = 24000
+    if rate < 8000 or rate > 192000:
+        rate = 24000
+    layout = channel_layout if channel_layout in {"mono", "stereo"} else "mono"
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         ff, "-y",
         "-f", "lavfi",
-        "-i", "anullsrc=channel_layout=mono:sample_rate=24000",
+        "-i", f"anullsrc=channel_layout={layout}:sample_rate={rate}",
         "-t", f"{sec:.3f}",
         "-c:a", "libmp3lame", "-q:a", "4",
         str(dest),
@@ -522,8 +554,7 @@ def _synth_script_then_concat(
     if len(segments) == 1 and segments[0][1] <= 0:
         return _synth_chunks_then_concat(split_tts_chunks(segments[0][0]), dest, one_fn)
 
-    all_words: List[Dict[str, Any]] = []
-    offset = 0.0
+    timeline: List[Tuple[Any, ...]] = []
     parts: List[Path] = []
     try:
         for spoken, pause in segments:
@@ -535,24 +566,47 @@ def _synth_script_then_concat(
                     if not ok:
                         return False, msg, []
                     parts.append(p)
-                    all_words.extend(shift_words(words, offset))
-                    dur = _audio_duration_seconds(p)
-                    if dur <= 0 and words:
-                        try:
-                            dur = max(float(w.get("end") or 0) for w in words)
-                        except (TypeError, ValueError):
-                            dur = 0.0
-                    offset += max(0.0, dur)
+                    timeline.append(("speech", p, words))
             if pause > 0.04:
-                sp = dest.with_name(f"{dest.stem}.__p{len(parts):02d}.mp3")
-                ok, msg = _make_silence_mp3(sp, pause)
+                timeline.append(("pause", float(pause)))
+        if not any(item[0] == "speech" for item in timeline):
+            return False, "No hay narración para convertir en voz", []
+        rate, layout = 24000, "mono"
+        for item in timeline:
+            if item[0] == "speech":
+                rate, layout = _probe_audio_format(item[1])
+                break
+        concat_parts: List[Path] = []
+        all_words: List[Dict[str, Any]] = []
+        offset = 0.0
+        pause_i = 0
+        for item in timeline:
+            if item[0] == "pause":
+                sp = dest.with_name(f"{dest.stem}.__p{pause_i:02d}.mp3")
+                pause_i += 1
+                ok, msg = _make_silence_mp3(
+                    sp, item[1], sample_rate=rate, channel_layout=layout
+                )
                 if not ok:
                     return False, msg, []
                 parts.append(sp)
-                offset += pause
-        if not parts:
+                concat_parts.append(sp)
+                offset += float(item[1])
+                continue
+            p = item[1]
+            words = item[2]
+            concat_parts.append(p)
+            all_words.extend(shift_words(words, offset))
+            dur = _audio_duration_seconds(p)
+            if dur <= 0 and words:
+                try:
+                    dur = max(float(w.get("end") or 0) for w in words)
+                except (TypeError, ValueError):
+                    dur = 0.0
+            offset += max(0.0, dur)
+        if not concat_parts:
             return False, "No hay narración para convertir en voz", []
-        ok, msg = _concat_audio_files(parts, dest)
+        ok, msg = _concat_audio_files(concat_parts, dest)
         if not ok:
             return False, msg, []
         return True, str(dest), all_words
@@ -607,7 +661,9 @@ def synthesize_voiceover(
         rate = sanitize_vo_rate(vo_rate)
 
         def one(chunk: str, path: Path):
-            ok, msg, words = synthesize_elevenlabs(chunk, path, style, voice_id)
+            ok, msg, words = _as_synth_result(
+                synthesize_elevenlabs(chunk, path, style, voice_id)
+            )
             if not ok:
                 return ok, msg, words
             ok, msg = _atempo_vo_file(path, rate)

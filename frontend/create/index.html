@@ -314,6 +314,20 @@
           <span id="sceneDurLbl" class="text-[10px] w-10 text-neutral-400">2.0s</span>
         </div>
         <div class="flex items-center gap-2 mt-2">
+          <span class="text-[10px] text-neutral-500">Foto fija</span>
+          <input type="number" id="stillHoldDur" min="0.4" max="120" step="0.1" value="4" class="w-16 bg-neutral-900 border border-neutral-700 rounded px-1 text-xs">
+          <button type="button" class="tool" onclick="sceneSetStillHold($('stillHoldDur').value)">Mantener</button>
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+          <span class="text-[10px] text-neutral-500">Ajuste</span>
+          <select id="sceneFit" class="scene-select" onchange="sceneSetFit(this.value)">
+            <option value="contain">Contain (barras negras)</option>
+            <option value="cover">Cover (rellenar)</option>
+          </select>
+          <button type="button" class="tool" onclick="applyFitToAll()">Aplicar a todas las escenas</button>
+        </div>
+        <a class="tool mt-2 inline-block" id="editThisClip" href="/editor" onclick="editThisClip(); return false;">Editar este clip</a>
+        <div class="flex items-center gap-2 mt-2">
           <span class="text-[10px] text-neutral-500">VO</span>
           <input type="range" id="voRate" min="50" max="150" value="100" step="5" class="flex-1 accent-green-500" oninput="sceneSetVoRate(this.value/100, false)" onchange="sceneSetVoRate(this.value/100, true)">
           <span id="voRateLbl" class="text-[10px] w-10 text-neutral-400">1.00x</span>
@@ -538,6 +552,8 @@
     var sequenceRev = 0;
     var restoring = false;
     var saveTimer = null;
+    var saveInFlight = false;
+    var saveQueued = false;
     var dragFrom = null;
     var dragClip = null;
     var didDrag = false;
@@ -670,7 +686,12 @@
         .then(function (b) {
           if (b && job.img && job.img.isConnected) {
             job.img.classList.remove("poster-miss");
-            job.img.src = URL.createObjectURL(b);
+            if (job.img.dataset.blob) {
+              try { URL.revokeObjectURL(job.img.dataset.blob); } catch (e) {}
+            }
+            var blobUrl = URL.createObjectURL(b);
+            job.img.dataset.blob = blobUrl;
+            job.img.src = blobUrl;
           }
         })
         .catch(function () {})
@@ -699,6 +720,15 @@
       var c = libBy(name);
       var d = c ? Number(c.duration) : 0;
       return d > 0 ? d : 0;
+    }
+    function isStillScene(s) {
+      if (!s) return false;
+      if (s.freeze) return true;
+      var name = String(s.clip || s.name || "");
+      return /^img_/i.test(name);
+    }
+    function sceneFit(s) {
+      return s && s.fit === "cover" ? "cover" : "contain";
     }
     function sceneDur(s) {
       if (!s) return 0.2;
@@ -1083,6 +1113,14 @@
         if (full.value !== sc) full.value = sc;
       }
       syncSceneGradeSliders(s.grade);
+      var fitSel = $("sceneFit");
+      if (fitSel) fitSel.value = sceneFit(s);
+      var hold = $("stillHoldDur");
+      if (hold && document.activeElement !== hold) {
+        hold.value = String(isStillScene(s) ? sceneDur(s) : 4);
+      }
+      var edit = $("editThisClip");
+      if (edit) edit.href = "/editor?scene=" + (s.id ? encodeURIComponent(s.id) : "");
     }
 
     function syncSceneGradeSliders(g) {
@@ -1185,6 +1223,7 @@
       var video = el || previewLive();
       if (!video) return;
       video.style.filter = s ? gradeCss(s.grade) : "";
+      video.style.objectFit = sceneFit(s);
       var rot = s && s.rotation ? "rotate(" + s.rotation + "deg)" : "";
       video.style.transform = rot;
       if (video.classList.contains("is-back")) {
@@ -2696,6 +2735,35 @@
       rebuild(true);
       renderAll();
     }
+    function sceneSetStillHold(sec) {
+      var s = active();
+      if (!s) return;
+      var d = Math.max(0.4, Math.min(120, Number(sec) || 0.4));
+      s.freeze = true;
+      s.duration = Math.round(d * 100) / 100;
+      rebuild(true);
+      syncPreview(currentTime, isPlaying);
+      lockSave();
+    }
+    function sceneSetFit(v) {
+      var s = active();
+      if (!s) return;
+      s.fit = v === "cover" ? "cover" : "contain";
+      applyScenePreviewFx(s);
+      lockSave();
+    }
+    function editThisClip() {
+      var s = active();
+      if (!s) return;
+      var id = s.id ? encodeURIComponent(s.id) : "";
+      location.href = "/editor?scene=" + id;
+    }
+    function applyFitToAll() {
+      var sel = $("sceneFit");
+      var fit = sel && sel.value === "cover" ? "cover" : "contain";
+      (plan.scenes || []).forEach(function (s) { s.fit = fit; });
+      rebuild();
+    }
     function sceneSetDuration(playSec, commit) {
       var s = flushNarration() || active();
       if (!s) return;
@@ -3327,6 +3395,7 @@
 
     function saveNow() {
       if (restoring) return false;
+      if (saveInFlight) { saveQueued = true; return true; }
       flushDocument();
       var payload = {
         savedAt: Date.now(),
@@ -3354,29 +3423,57 @@
       var stamp = new Date(payload.savedAt);
       var el = $("saveState");
       if (el) el.textContent = "Guardando…";
+      saveInFlight = true;
+      function noteSaved(r, d) {
+        if (d && d.sequence && d.sequence.rev != null) sequenceRev = Number(d.sequence.rev) || sequenceRev;
+        else if (d && d.rev != null) sequenceRev = Number(d.rev) || sequenceRev;
+        if (d && d.stale && d.sequence) {
+          if (el) el.textContent = "Disco mas nuevo · recargado";
+          restoring = true;
+          return Promise.resolve(restore(sequenceToAssemble(d.sequence))).then(function () {
+            restoring = false;
+          });
+        }
+        if (d && d.shrink && !payload.force) {
+          var fromN = d.from;
+          var toN = d.to;
+          if (!window.confirm("Vas a pasar de " + fromN + " a " + toN + " escenas. ¿Guardar de todas formas?")) {
+            if (el) el.textContent = "Sin cambios";
+            return;
+          }
+          payload.force = true;
+          return fetch("/api/sequence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          }).then(function (r2) {
+            return r2.json().catch(function () { return {}; }).then(function (d2) {
+              return noteSaved(r2, d2);
+            });
+          });
+        }
+        if (!r.ok || d.ok === false) {
+          if (el) el.textContent = "No se pudo guardar: " + apiError(d, "HTTP " + r.status);
+          return;
+        }
+        if (el) el.textContent = "Guardado " + stamp.toLocaleTimeString();
+      }
       fetch("/api/sequence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       }).then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (d) {
-          if (d && d.sequence && d.sequence.rev != null) sequenceRev = Number(d.sequence.rev) || sequenceRev;
-          else if (d && d.rev != null) sequenceRev = Number(d.rev) || sequenceRev;
-          if (d && d.stale && d.sequence) {
-            if (el) el.textContent = "Disco mas nuevo · recargado";
-            restoring = true;
-            return Promise.resolve(restore(sequenceToAssemble(d.sequence))).then(function () {
-              restoring = false;
-            });
-          }
-          if (!r.ok || d.ok === false) {
-            if (el) el.textContent = "No se pudo guardar: " + apiError(d, "HTTP " + r.status);
-            return;
-          }
-          if (el) el.textContent = "Guardado " + stamp.toLocaleTimeString();
+          return noteSaved(r, d);
         });
       }).catch(function () {
         if (el) el.textContent = "No se pudo guardar";
+      }).then(function () {
+        saveInFlight = false;
+        if (saveQueued) {
+          saveQueued = false;
+          saveNow();
+        }
       });
       return true;
     }

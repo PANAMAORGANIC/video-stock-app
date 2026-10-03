@@ -4,6 +4,8 @@ Run from backend/:  python -m unittest test_clearview -v
 """
 from __future__ import annotations
 
+import array
+import hashlib
 import json
 import math
 import struct
@@ -1576,6 +1578,8 @@ class ApiRouteTests(unittest.TestCase):
         self.assertIn("/api/sequence/music", paths)
         self.assertIn("/api/sequence/scene", paths)
         self.assertIn("/api/clips/publish", paths)
+        self.assertIn("/api/clips/replace-audio", paths)
+        self.assertIn("/api/clips/replace-audio/preview", paths)
         self.assertIn("/api/send-to-create", paths)
         self.assertIn("/api/clips/peaks", paths)
         self.assertIn("/api/clips/poster", paths)
@@ -3464,6 +3468,325 @@ class ClipPublishAndScenePatchTests(unittest.TestCase):
         loaded, _ = load_sequence(folder=self.folder, library=self.clips)
         self.assertEqual(loaded["rev"], r0 + 2)
         self.assertEqual(loaded["scenes"][0]["text"], "a2")
+
+
+def _rms_windows(path, win=0.1, rate=8000):
+    """Per-window RMS of the file's audio. Used to see offset and dropped camera tone."""
+    from video_tools import _run_bytes, ffmpeg_bin
+    ff = ffmpeg_bin()
+    cmd = [
+        ff, "-hide_banner", "-loglevel", "error",
+        "-i", str(path),
+        "-vn", "-ac", "1", "-ar", str(rate),
+        "-f", "s16le", "pipe:1",
+    ]
+    result = _run_bytes(cmd, timeout=30)
+    pcm = result.stdout or b""
+    if len(pcm) % 2:
+        pcm = pcm[:-1]
+    samples = array.array("h")
+    samples.frombytes(pcm)
+    n = max(1, int(win * rate))
+    out = []
+    for i in range(0, len(samples) - n + 1, n):
+        chunk = samples[i:i + n]
+        acc = sum(s * s for s in chunk) / len(chunk)
+        out.append(acc ** 0.5)
+    return out
+
+
+def _first_loud(windows, thresh=400.0):
+    for i, v in enumerate(windows):
+        if v > thresh:
+            return i
+    return None
+
+
+class ReplaceMicAudioTests(unittest.TestCase):
+    """Podcast mic onto a Library video. New clip only. Bed and Sequence stay put."""
+
+    def setUp(self):
+        if not check_ffmpeg():
+            self.skipTest("ffmpeg not installed")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.clips = Path(self.tmp.name) / "clips"
+        self.exports = Path(self.tmp.name) / "exports_tmp"
+        self.clips.mkdir()
+        self.exports.mkdir()
+        self.media = Path(self.tmp.name) / "media"
+        self.media.mkdir()
+        from video_create import sequence_music_path, sequence_paths
+        self.seq_path, _bak = sequence_paths()
+        self.music_path = sequence_music_path()
+        self.seq_existed = self.seq_path.is_file()
+        self.music_existed = self.music_path.is_file()
+        self.seq_before = self.seq_path.read_bytes() if self.seq_existed else None
+        self.music_before = self.music_path.read_bytes() if self.music_existed else None
+        if not self.music_existed:
+            self.music_path.parent.mkdir(parents=True, exist_ok=True)
+            self.music_path.write_bytes(b"\xff\xfb" + b"\x11" * 480)
+            self.music_before = self.music_path.read_bytes()
+        if not self.seq_existed:
+            self.seq_path.parent.mkdir(parents=True, exist_ok=True)
+            self.seq_path.write_text('{"version":1,"rev":1,"scenes":[]}', encoding="utf-8")
+            self.seq_before = self.seq_path.read_bytes()
+
+    def tearDown(self):
+        try:
+            if self.seq_existed:
+                self.seq_path.write_bytes(self.seq_before)
+            elif self.seq_path.is_file() and self.seq_path.read_bytes() == self.seq_before:
+                self.seq_path.unlink()
+            if self.music_existed:
+                self.music_path.write_bytes(self.music_before)
+            elif self.music_path.is_file() and self.music_path.read_bytes() == self.music_before:
+                self.music_path.unlink()
+        except Exception:
+            pass
+        self.tmp.cleanup()
+
+    def _sha(self, path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _ff(self, cmd):
+        from video_tools import _run
+        return _run(cmd)
+
+    def _video(self, dest: Path):
+        ff = ffmpeg_bin()
+        cmd = [
+            ff, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=2:r=15",
+            "-f", "lavfi", "-i", "sine=frequency=1000:duration=2:sample_rate=48000",
+            "-c:v", "mpeg4", "-c:a", "aac", "-shortest", str(dest),
+        ]
+        r = self._ff(cmd)
+        if r.returncode != 0 or not dest.is_file() or dest.stat().st_size < 500:
+            self.skipTest("could not mux camera fixture")
+
+    def _mic(self, dest: Path, head=0.4, tone=1.6):
+        ff = ffmpeg_bin()
+        cmd = [
+            ff, "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"anullsrc=r=48000:cl=mono:d={head}",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={tone}:sample_rate=48000",
+            "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1",
+            "-c:a", "pcm_s16le", str(dest),
+        ]
+        r = self._ff(cmd)
+        if r.returncode != 0 or not dest.is_file():
+            self.skipTest("could not mux mic fixture")
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from main import app
+        return TestClient(app)
+
+    def _dirs(self):
+        return (
+            patch("main.CLIPS_DIR", self.clips),
+            patch("main.EXPORTS_TMP", self.exports),
+        )
+
+    def _post(self, client, clip_id, offset, audio_path, label=None, preview=False):
+        url = "/api/clips/replace-audio/preview" if preview else "/api/clips/replace-audio"
+        data = {"clip_id": clip_id}
+        if offset is not None:
+            data["offset_ms"] = offset
+        if label is not None:
+            data["label"] = label
+        with audio_path.open("rb") as fh:
+            files = {"audio": (audio_path.name, fh, "audio/wav")}
+            return client.post(url, data=data, files=files)
+
+    def _assert_bed_and_sequence(self):
+        self.assertEqual(self.seq_path.read_bytes(), self.seq_before)
+        self.assertEqual(self.music_path.read_bytes(), self.music_before)
+        self.assertTrue(self.music_path.is_file())
+        self.assertEqual(self.music_path.name, "music.mp3")
+
+    def test_new_clip_source_unchanged_sequence_and_music_untouched(self):
+        src = self.clips / "pixel_interview.mp4"
+        mic = self.media / "ocenaudio.wav"
+        self._video(src)
+        self._mic(mic)
+        src_hash = self._sha(src)
+        src_mtime = src.stat().st_mtime_ns
+        mic_hash = self._sha(mic)
+        attached = []
+
+        def _attach(name):
+            attached.append(name)
+            return [name]
+
+        with self._dirs()[0], self._dirs()[1]:
+            with patch("main.attach_clip_to_active_project", side_effect=_attach):
+                with patch("main.save_sequence", side_effect=AssertionError("sequence write")):
+                    with patch("main.persist_sequence_music", side_effect=AssertionError("bed music")):
+                        client = self._client()
+                        res = self._post(client, "pixel_interview.mp4", "0", mic, label="entrevista_mic")
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertTrue(data.get("ok"))
+        self.assertFalse(data.get("preview"))
+        self.assertEqual(data.get("offset_ms"), 0)
+        self.assertEqual(data.get("source"), "pixel_interview.mp4")
+        self.assertTrue(str(data.get("path") or "").startswith("/clips/"))
+        baked = self.clips / data["filename"]
+        self.assertTrue(baked.is_file(), data)
+        self.assertNotEqual(baked.resolve(), src.resolve())
+        self.assertEqual(baked.suffix.lower(), ".mp4")
+        self.assertTrue(baked.name.startswith("entrevista_mic"))
+        self.assertEqual(self._sha(src), src_hash)
+        self.assertEqual(src.stat().st_mtime_ns, src_mtime)
+        self.assertEqual(self._sha(mic), mic_hash)
+        self.assertEqual(attached, [baked.name])
+        from video_tools import get_video_info
+        info = get_video_info(baked)
+        kinds = [s.get("codec_type") for s in info.get("streams") or []]
+        self.assertEqual(kinds.count("video"), 1)
+        self.assertEqual(kinds.count("audio"), 1)
+        self.assertAlmostEqual(probe_duration(baked) or 0, probe_duration(src) or 0, delta=0.15)
+        with self._dirs()[0]:
+            client = self._client()
+            listed = client.get("/api/clips")
+        names = [c["name"] for c in listed.json().get("clips") or []]
+        self.assertIn(baked.name, names)
+        self.assertIn("pixel_interview.mp4", names)
+        self._assert_bed_and_sequence()
+
+    def test_offset_required(self):
+        src = self.clips / "pixel_interview.mp4"
+        mic = self.media / "ocenaudio.wav"
+        self._video(src)
+        self._mic(mic)
+        before = {p.name for p in self.clips.iterdir()}
+        with self._dirs()[0], self._dirs()[1]:
+            client = self._client()
+            missing = self._post(client, src.name, None, mic)
+            blank = self._post(client, src.name, "  ", mic)
+            frac = self._post(client, src.name, "1.5", mic)
+            word = self._post(client, src.name, "auto", mic)
+        for res in (missing, blank, frac, word):
+            self.assertEqual(res.status_code, 400, res.text)
+        self.assertEqual({p.name for p in self.clips.iterdir()}, before)
+        self._assert_bed_and_sequence()
+
+    def test_positive_and_negative_offset(self):
+        src = self.clips / "pixel_interview.mp4"
+        mic = self.media / "ocenaudio.wav"
+        self._video(src)
+        self._mic(mic)
+        with self._dirs()[0], self._dirs()[1]:
+            with patch("main.attach_clip_to_active_project", return_value=[]):
+                client = self._client()
+                pos = self._post(client, src.name, "500", mic, label="mic_plus")
+                neg = self._post(client, src.name, "-300", mic, label="mic_minus")
+        self.assertEqual(pos.status_code, 200, pos.text)
+        self.assertEqual(neg.status_code, 200, neg.text)
+        self.assertEqual(pos.json().get("offset_ms"), 500)
+        self.assertEqual(neg.json().get("offset_ms"), -300)
+        plus = _first_loud(_rms_windows(self.clips / pos.json()["filename"]))
+        minus = _first_loud(_rms_windows(self.clips / neg.json()["filename"]))
+        self.assertIsNotNone(plus)
+        self.assertIsNotNone(minus)
+        self.assertAlmostEqual(plus, 9, delta=1)
+        self.assertAlmostEqual(minus, 1, delta=1)
+        self.assertGreater(plus, minus)
+        self._assert_bed_and_sequence()
+
+    def test_camera_audio_discarded(self):
+        src = self.clips / "pixel_interview.mp4"
+        mic = self.media / "ocenaudio.wav"
+        self._video(src)
+        self._mic(mic)
+        cam = _rms_windows(src)
+        self.assertGreater(sum(cam[:3]) / 3.0, 500)
+        with self._dirs()[0], self._dirs()[1]:
+            with patch("main.attach_clip_to_active_project", return_value=[]):
+                client = self._client()
+                res = self._post(client, src.name, "0", mic, label="mic_only")
+        self.assertEqual(res.status_code, 200, res.text)
+        out = _rms_windows(self.clips / res.json()["filename"])
+        self.assertLess(sum(out[:3]) / 3.0, 80)
+        loud = _first_loud(out)
+        self.assertIsNotNone(loud)
+        self.assertAlmostEqual(loud, 4, delta=1)
+        from video_tools import get_video_info
+        info = get_video_info(self.clips / res.json()["filename"])
+        audio = [s for s in info.get("streams") or [] if s.get("codec_type") == "audio"]
+        self.assertEqual(len(audio), 1)
+
+    def test_preview_stays_in_exports_tmp(self):
+        src = self.clips / "pixel_interview.mp4"
+        mic = self.media / "ocenaudio.wav"
+        self._video(src)
+        self._mic(mic)
+        with self._dirs()[0], self._dirs()[1]:
+            with patch("main.attach_clip_to_active_project", side_effect=AssertionError("preview registers")):
+                client = self._client()
+                res = self._post(client, src.name, "-120", mic, preview=True)
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertTrue(data.get("preview"))
+        self.assertEqual(data.get("offset_ms"), -120)
+        self.assertFalse(str(data.get("url") or "").startswith("/clips/"))
+        preview = self.exports / data["filename"]
+        self.assertTrue(preview.is_file(), data)
+        self.assertEqual(preview.parent.resolve(), self.exports.resolve())
+        names = [p.name for p in self.clips.iterdir() if p.is_file()]
+        self.assertEqual(names, ["pixel_interview.mp4"])
+        self._assert_bed_and_sequence()
+
+    def test_unknown_clip_404(self):
+        mic = self.media / "ocenaudio.wav"
+        self._mic(mic)
+        with self._dirs()[0], self._dirs()[1]:
+            client = self._client()
+            res = self._post(client, "no-such-interview.mp4", "0", mic)
+        self.assertEqual(res.status_code, 404, res.text)
+        self.assertEqual(list(self.clips.iterdir()), [])
+        self.assertEqual(list(self.exports.iterdir()), [])
+        self._assert_bed_and_sequence()
+
+    def test_caf_and_ui_contract(self):
+        src = self.clips / "pixel_interview.mp4"
+        wav = self.media / "ocenaudio.wav"
+        caf = self.media / "ocenaudio.caf"
+        self._video(src)
+        self._mic(wav)
+        ff = ffmpeg_bin()
+        r = self._ff([
+            ff, "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(wav), "-c:a", "pcm_s16le", str(caf),
+        ])
+        if r.returncode != 0 or not caf.is_file():
+            self.skipTest("could not write caf")
+        with self._dirs()[0], self._dirs()[1]:
+            with patch("main.attach_clip_to_active_project", return_value=[]):
+                client = self._client()
+                with caf.open("rb") as fh:
+                    res = client.post(
+                        "/api/clips/replace-audio",
+                        data={"clip_id": src.name, "offset_ms": "0", "label": "desde_caf"},
+                        files={"audio": ("toma.caf", fh, "audio/x-caf")},
+                    )
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertTrue((self.clips / res.json()["filename"]).is_file())
+        root = Path(__file__).resolve().parent.parent
+        library = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+        editor = (root / "frontend" / "editor" / "index.html").read_text(encoding="utf-8")
+        assemble = (root / "frontend" / "create" / "index.html").read_text(encoding="utf-8")
+        for page in (library, editor):
+            self.assertIn("Audio de micrófono", page)
+            self.assertIn("Desfase (ms)", page)
+            self.assertIn(">Probar<", page)
+            self.assertIn("Guardar clip nuevo", page)
+            self.assertIn('fetch("/api/clips/replace-audio"', page)
+            self.assertIn('fetch("/api/clips/replace-audio/preview"', page)
+        self.assertNotIn("replace-audio", assemble)
+        self.assertNotIn("replaceAudio", assemble)
+        self._assert_bed_and_sequence()
 
 
 if __name__ == "__main__":
