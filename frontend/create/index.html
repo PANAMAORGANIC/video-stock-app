@@ -75,18 +75,26 @@
       border: 0; border-radius: 999px; background: #22c55e; color: #052e16; cursor: pointer;
     }
     .scene-trim {
-      position: relative; height: 22px; margin: 6px 8px 0;
-      background: #141414; border: 1px solid #3f3a2e; border-radius: 6px;
+      position: relative; height: 36px; margin: 8px 8px 0;
+      background: #1c1c1c; border: 1px solid #3f3a2e; border-radius: 6px;
     }
     .scene-trim .clip-dim, .scene-trim .clip-sel {
       position: absolute; top: 0; height: 100%; pointer-events: none;
     }
     .scene-trim .clip-dim { background: rgba(0, 0, 0, 0.55); z-index: 2; }
-    .scene-trim .clip-sel { background: #3f3a2e; z-index: 1; }
+    .scene-trim .clip-sel {
+      background: repeating-linear-gradient(90deg, #2a2418 0 8px, #332c1c 8px 16px);
+      z-index: 1;
+    }
     .scene-trim .handle {
-      position: absolute; top: 0; width: 10px; height: 100%;
+      position: absolute; top: -3px; width: 14px; height: calc(100% + 6px);
       background: #eab308; cursor: ew-resize; z-index: 4;
       transform: translateX(-50%); display: none;
+    }
+    .scene-trim .handle::after {
+      content: ""; position: absolute; top: 50%; left: 50%;
+      width: 2px; height: 16px; background: #7a5d00;
+      transform: translate(-50%, -50%); border-radius: 1px;
     }
     .scene-card.scene-active .scene-trim .handle { display: block; }
     .scene-trim .handle.left { border-radius: 4px 1px 1px 4px; }
@@ -579,6 +587,7 @@
     var playClockTime = 0;
     var playSceneIdx = -1;
     var sequenceRev = 0;
+    var trimSaveHint = "";
     var restoring = false;
     var saveTimer = null;
     var saveInFlight = false;
@@ -1695,12 +1704,13 @@
           s.inPoint = Math.round((Number(s.inPoint) || 0) * 100) / 100;
           s.outPoint = Math.round((Number(s.outPoint) || 0) * 100) / 100;
         }
+        trimSaveHint = side === "left"
+          ? "Inicio recortado."
+          : "Final recortado. Si el tirador no avanza, no queda más video en ese lado.";
         rebuild();
         renderAll();
         var hint = $("saveState");
-        if (hint) hint.textContent = side === "left"
-          ? "Inicio recortado."
-          : "Final recortado. Si el tirador no avanza, no queda más video en ese lado.";
+        if (hint) hint.textContent = trimSaveHint;
       }
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
@@ -3619,6 +3629,7 @@
         if (d && d.sequence && d.sequence.rev != null) sequenceRev = Number(d.sequence.rev) || sequenceRev;
         else if (d && d.rev != null) sequenceRev = Number(d.rev) || sequenceRev;
         if (d && d.stale && d.sequence) {
+          trimSaveHint = "";
           if (el) el.textContent = "Disco mas nuevo · recargado";
           restoring = true;
           return Promise.resolve(restore(sequenceToAssemble(d.sequence))).then(function () {
@@ -3644,10 +3655,12 @@
           });
         }
         if (!r.ok || d.ok === false) {
+          trimSaveHint = "";
           if (el) el.textContent = "No se pudo guardar: " + apiError(d, "HTTP " + r.status);
           return;
         }
-        if (el) el.textContent = "Guardado " + stamp.toLocaleTimeString();
+        if (el) el.textContent = trimSaveHint || ("Guardado " + stamp.toLocaleTimeString());
+        if (!saveQueued) trimSaveHint = "";
       }
       fetch("/api/sequence", {
         method: "POST",
