@@ -74,6 +74,24 @@
       position: absolute; right: 6px; bottom: 6px; width: 28px; height: 28px;
       border: 0; border-radius: 999px; background: #22c55e; color: #052e16; cursor: pointer;
     }
+    .scene-trim {
+      position: relative; height: 22px; margin: 6px 8px 0;
+      background: #141414; border: 1px solid #3f3a2e; border-radius: 6px;
+    }
+    .scene-trim .clip-dim, .scene-trim .clip-sel {
+      position: absolute; top: 0; height: 100%; pointer-events: none;
+    }
+    .scene-trim .clip-dim { background: rgba(0, 0, 0, 0.55); z-index: 2; }
+    .scene-trim .clip-sel { background: #3f3a2e; z-index: 1; }
+    .scene-trim .handle {
+      position: absolute; top: 0; width: 10px; height: 100%;
+      background: #eab308; cursor: ew-resize; z-index: 4;
+      transform: translateX(-50%); display: none;
+    }
+    .scene-card.scene-active .scene-trim .handle { display: block; }
+    .scene-trim .handle.left { border-radius: 4px 1px 1px 4px; }
+    .scene-trim .handle.right { border-radius: 1px 4px 4px 1px; }
+    .scene-trim-meta { font-size: 10px; color: #a3a3a3; padding: 2px 10px 0; }
     .scene-meta { padding: 8px 10px 10px; }
     .scene-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .scene-sub { font-size: 10px; color: #a3a3a3; margin-top: 2px; }
@@ -1037,8 +1055,18 @@
             '<span class="scene-dur">' + clock(sceneDur(s)) + '</span>' +
             '<button type="button" class="scene-play" data-i="' + i + '">▶</button>'
           : '<div class="text-neutral-500 text-xs p-6">Sin clip</div>';
+        var inn = (Number(s.inPoint) || 0).toFixed(1);
+        var out = (Number(s.outPoint) || 0).toFixed(1);
         return '<div class="scene-card card rounded-lg ' + activeCls + '" draggable="true" data-i="' + i + '">' +
           '<div class="scene-thumb">' + thumb + '</div>' +
+          '<div class="scene-trim" data-i="' + i + '">' +
+            '<div class="clip-dim head"></div>' +
+            '<div class="clip-sel"></div>' +
+            '<div class="clip-dim tail"></div>' +
+            '<div class="handle left" title="Inicio"></div>' +
+            '<div class="handle right" title="Final"></div>' +
+          '</div>' +
+          '<div class="scene-trim-meta">Inicio ' + inn + 's · Final ' + out + 's</div>' +
           '<div class="scene-meta"><div class="text-[10px] text-neutral-500">⋮⋮ Escena ' + (i + 1) + '</div>' +
           '<div class="scene-name">' + escapeHtml(pretty(s.clip)) + '</div>' +
           '<div class="scene-sub">' + clock(sceneDur(s)) + '</div></div></div>';
@@ -1047,6 +1075,15 @@
         '<button type="button" class="scene-add" id="addSceneBtn"><span class="text-3xl">+</span><span class="text-xs">Añadir escena</span></button>';
       box.querySelectorAll(".scene-thumb img[data-clip]").forEach(function (img) {
         bindPoster(img, img.getAttribute("data-clip"), img.getAttribute("data-t"));
+      });
+      box.querySelectorAll(".scene-trim").forEach(function (el) {
+        var i = Number(el.getAttribute("data-i"));
+        var s = (plan.scenes || [])[i];
+        layoutSceneTrim(el, s);
+        var left = el.querySelector(".handle.left");
+        var right = el.querySelector(".handle.right");
+        if (left) left.addEventListener("mousedown", function (e) { startSceneEdgeDrag("left", i, el, e); });
+        if (right) right.addEventListener("mousedown", function (e) { startSceneEdgeDrag("right", i, el, e); });
       });
       (plan.scenes || []).forEach(function (s) { if (s.clip) kickProxy(s.clip); });
       var n = (plan.scenes || []).length;
@@ -1601,6 +1638,73 @@
       syncPreview(currentTime, false);
     }
 
+    function layoutSceneTrim(el, s) {
+      if (!el || !s) return;
+      var max = Math.max(0.2, sceneSourceMax(s));
+      var px = (el.clientWidth || 160) / max;
+      var inX = Math.max(0, (Number(s.inPoint) || 0) * px);
+      var outX = Math.max(inX + 2, (Number(s.outPoint) || 0) * px);
+      var srcPx = max * px;
+      var head = el.querySelector(".clip-dim.head");
+      var sel = el.querySelector(".clip-sel");
+      var tail = el.querySelector(".clip-dim.tail");
+      if (head) { head.style.left = "0px"; head.style.width = inX + "px"; }
+      if (sel) { sel.style.left = inX + "px"; sel.style.width = Math.max(2, outX - inX) + "px"; }
+      if (tail) { tail.style.left = outX + "px"; tail.style.width = Math.max(0, srcPx - outX) + "px"; }
+      var left = el.querySelector(".handle.left");
+      var right = el.querySelector(".handle.right");
+      if (left) left.style.left = ((Number(s.inPoint) || 0) * px) + "px";
+      if (right) right.style.left = ((Number(s.outPoint) || 0) * px) + "px";
+    }
+    function startSceneEdgeDrag(side, index, el, e) {
+      e.preventDefault();
+      e.stopPropagation();
+      didDrag = true;
+      var s = (plan.scenes || [])[index];
+      if (!s) return;
+      selectedSceneIndex = index;
+      markSelectedScene(index);
+      var startX = e.clientX;
+      var origIn = Number(s.inPoint) || 0;
+      var origOut = Number(s.outPoint) || (origIn + 0.2);
+      var origDur = Number(s.duration) || sceneDur(s);
+      var maxOut = sceneSourceMax(s);
+      var px = (el.clientWidth || 160) / Math.max(0.2, maxOut);
+      function onMove(ev) {
+        var dt = (ev.clientX - startX) / px;
+        if (s.freeze) {
+          if (side === "right") s.duration = Math.max(0.2, origDur + dt);
+          else s.duration = Math.max(0.2, origDur - dt);
+        } else if (side === "left") {
+          s.inPoint = Math.max(0, Math.min(origIn + dt, origOut - 0.2));
+        } else {
+          s.outPoint = Math.max(origIn + 0.2, Math.min(maxOut, origOut + dt));
+        }
+        layoutSceneTrim(el, s);
+        var card = el.closest(".scene-card");
+        var meta = card && card.querySelector(".scene-trim-meta");
+        if (meta) meta.textContent = "Inicio " + (Number(s.inPoint) || 0).toFixed(1) + "s · Final " + (Number(s.outPoint) || 0).toFixed(1) + "s";
+        currentTime = side === "left" ? (s.timelineStart || 0) : (s.timelineStart || 0) + sceneDur(s) - 0.04;
+        syncPreview(currentTime, false);
+        updateHud();
+      }
+      function onUp() {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        if (!s.freeze) {
+          s.inPoint = Math.round((Number(s.inPoint) || 0) * 100) / 100;
+          s.outPoint = Math.round((Number(s.outPoint) || 0) * 100) / 100;
+        }
+        rebuild();
+        renderAll();
+        var hint = $("saveState");
+        if (hint) hint.textContent = side === "left"
+          ? "Inicio recortado."
+          : "Final recortado. Si el tirador no avanza, no queda más video en ese lado.";
+      }
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    }
     function sceneTrim(side) {
       var s = active();
       if (!s) return;
@@ -3312,6 +3416,7 @@
         playScene(Number(card.getAttribute("data-i")), false);
       });
       $("sceneList").addEventListener("dragstart", function (ev) {
+        if (ev.target.closest(".scene-trim")) { ev.preventDefault(); return; }
         var card = ev.target.closest(".scene-card");
         if (!card) return;
         dragFrom = Number(card.getAttribute("data-i"));

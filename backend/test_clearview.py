@@ -899,6 +899,56 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(seq["scenes"][0]["text"], "Inicio")
         self.assertEqual(seq["ui"]["captions"]["style"], "bold")
 
+    def test_trim_persists_other_scene_untouched_stale_rev_keeps_disk(self):
+        seq, src = save_sequence(
+            {
+                "title": "Corte",
+                "rev": 1,
+                "scenes": [
+                    {"id": "s-a", "clip": "rio.mp4", "inPoint": 0, "outPoint": 8, "text": "uno"},
+                    {"id": "s-b", "clip": "humo.mp4", "inPoint": 1, "outPoint": 5, "text": "dos"},
+                ],
+            },
+            folder=self.folder,
+            library=self.clips,
+            force=True,
+        )
+        self.assertEqual(src, "sequence.json")
+        self.assertEqual(seq["scenes"][0]["inPoint"], 0)
+        self.assertEqual(seq["scenes"][0]["outPoint"], 8)
+        trimmed = json.loads(json.dumps(seq))
+        trimmed["scenes"][0]["inPoint"] = 1.5
+        trimmed["scenes"][0]["outPoint"] = 4.0
+        saved, src = save_sequence(trimmed, folder=self.folder, library=self.clips, force=False)
+        self.assertEqual(src, "sequence.json")
+        self.assertEqual(saved["scenes"][0]["id"], "s-a")
+        self.assertEqual(saved["scenes"][0]["clip"], "rio.mp4")
+        self.assertEqual(saved["scenes"][0]["inPoint"], 1.5)
+        self.assertEqual(saved["scenes"][0]["outPoint"], 4.0)
+        self.assertEqual(saved["scenes"][0]["text"], "uno")
+        self.assertEqual(saved["scenes"][1]["id"], "s-b")
+        self.assertEqual(saved["scenes"][1]["clip"], "humo.mp4")
+        self.assertEqual(saved["scenes"][1]["inPoint"], 1)
+        self.assertEqual(saved["scenes"][1]["outPoint"], 5)
+        self.assertEqual(saved["scenes"][1]["text"], "dos")
+        self.assertNotIn("replaceAudio", saved["scenes"][0])
+        disk = (self.folder / "sequence.json").read_bytes()
+        stale = json.loads(json.dumps(saved))
+        stale["rev"] = seq["rev"]
+        stale["scenes"][0]["inPoint"] = 0
+        stale["scenes"][0]["outPoint"] = 1
+        stale["scenes"][1]["clip"] = "wiped.mp4"
+        stale["scenes"][1]["text"] = "no"
+        kept, src = save_sequence(stale, folder=self.folder, library=self.clips, force=False)
+        self.assertEqual(src, "stale")
+        self.assertEqual((self.folder / "sequence.json").read_bytes(), disk)
+        self.assertEqual(kept["scenes"][0]["inPoint"], 1.5)
+        self.assertEqual(kept["scenes"][0]["outPoint"], 4.0)
+        self.assertEqual(kept["scenes"][1]["clip"], "humo.mp4")
+        self.assertEqual(kept["scenes"][1]["inPoint"], 1)
+        self.assertEqual(kept["scenes"][1]["outPoint"], 5)
+        self.assertEqual(kept["scenes"][1]["text"], "dos")
+
     def test_save_load_roundtrip(self):
         seq, src = save_sequence(
             {"title": "T", "scenes": [
@@ -3125,6 +3175,35 @@ class FrontendWriterContractTests(unittest.TestCase):
         self.assertIn('id="stillHoldDur"', src)
         self.assertIn("function sceneDur(s)", src)
         self.assertIn("if (s.freeze)", src)
+
+    def test_assemble_drag_trim_matches_edit(self):
+        src = self.create
+        self.assertIn("function layoutSceneTrim(", src)
+        self.assertIn("function startSceneEdgeDrag(", src)
+        self.assertIn('class="clip-dim head"', src)
+        self.assertIn('class="clip-sel"', src)
+        self.assertIn('class="clip-dim tail"', src)
+        self.assertIn('class="handle left"', src)
+        self.assertIn('class="handle right"', src)
+        self.assertIn('title="Inicio"', src)
+        self.assertIn('title="Final"', src)
+        self.assertIn("Inicio recortado.", src)
+        self.assertIn("Final recortado. Si el tirador no avanza, no queda más video en ese lado.", src)
+        start = src.find("function startSceneEdgeDrag(")
+        self.assertGreater(start, 0)
+        body = src[start:src.find("function sceneTrim(", start)]
+        self.assertIn("s.inPoint = Math.max(0, Math.min(origIn + dt, origOut - 0.2));", body)
+        self.assertIn("s.outPoint = Math.max(origIn + 0.2, Math.min(maxOut, origOut + dt));", body)
+        left_branch = body.split('else if (side === "left")')[1].split("} else {")[0]
+        self.assertIn("s.inPoint =", left_branch)
+        self.assertNotIn("s.outPoint =", left_branch)
+        right_branch = body.split("} else {")[1].split("layoutSceneTrim")[0]
+        self.assertIn("s.outPoint =", right_branch)
+        self.assertNotIn("s.inPoint =", right_branch)
+        self.assertNotIn("replace-audio", body)
+        self.assertNotIn("replaceAudio", body)
+        self.assertNotIn("music.mp3", body)
+        self.assertNotIn("/api/sequence/music", body)
 
     def test_clip_picker_uses_api_url_not_title(self):
         start = self.editor.find("async function fillClipPicker()")
