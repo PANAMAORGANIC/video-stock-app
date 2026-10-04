@@ -1036,7 +1036,8 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
         tmp = dest.with_name(dest.name + ".tmp.mp4")
         tries = [
             [
-                ff, "-y", "-i", str(path),
+                ff, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-i", str(path),
                 "-vf", f"scale=-2:{PROXY_HEIGHT}",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
                 "-c:a", "aac", "-b:a", "96k",
@@ -1044,7 +1045,8 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                 str(tmp),
             ],
             [
-                ff, "-y", "-i", str(path),
+                ff, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-i", str(path),
                 "-vf", "scale=-2:480",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
                 "-an",
@@ -1052,13 +1054,21 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                 str(tmp),
             ],
         ]
+        def _drop_tmp() -> None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
         try:
             for cmd in tries:
                 try:
-                    r = subprocess.run(cmd, timeout=180, **_win_kwargs())
-                except Exception:
+                    # No short fuse: a ~45 min HEVC proxy can run well past 180s.
+                    r = subprocess.run(cmd, **_win_kwargs())
+                except (OSError, subprocess.SubprocessError):
+                    _drop_tmp()
                     continue
-                if tmp.is_file() and tmp.stat().st_size > 2000:
+                if r.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 2000:
                     try:
                         if dest.exists():
                             dest.unlink()
@@ -1067,14 +1077,13 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                         try:
                             shutil.copyfile(tmp, dest)
                         except Exception:
+                            _drop_tmp()
                             return "failed", None
                     return ("ready", dest) if dest.is_file() else ("failed", None)
+                _drop_tmp()
             return "failed", None
         finally:
-            try:
-                tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+            _drop_tmp()
 
 
 def move_clip_proxy(src: Path, dest: Path) -> None:

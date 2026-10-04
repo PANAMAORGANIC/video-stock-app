@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import struct
+import subprocess
 import tempfile
 import threading
 import time
@@ -2450,6 +2451,58 @@ class PreviewPerfTests(unittest.TestCase):
             self.assertEqual(status, "skipped")
             self.assertIsNone(dest)
 
+    def test_proxy_encode_has_no_180s_fuse_and_drops_failed_partial(self):
+        if not check_ffmpeg():
+            self.skipTest("ffmpeg not installed")
+        from video_tools import PROXIES_DIR, ensure_clip_proxy
+        PROXIES_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as d:
+            big = Path(d) / "hevc_interview_unit.mp4"
+            with big.open("wb") as fh:
+                fh.seek((15 * 1024 * 1024) + 64)
+                fh.write(b"\0")
+            dest = PROXIES_DIR / big.name
+            tmp = dest.with_name(dest.name + ".tmp.mp4")
+
+            def boom(cmd, **kwargs):
+                self.assertNotIn("timeout", kwargs)
+                Path(cmd[-1]).parent.mkdir(parents=True, exist_ok=True)
+                Path(cmd[-1]).write_bytes(b"x" * 4000)
+                raise subprocess.TimeoutExpired(cmd, 180)
+
+            def reject(cmd, **kwargs):
+                self.assertNotIn("timeout", kwargs)
+                Path(cmd[-1]).write_bytes(b"x" * 4000)
+                return subprocess.CompletedProcess(cmd, 1)
+
+            try:
+                with patch("video_tools.subprocess.run", side_effect=boom):
+                    status, out = ensure_clip_proxy(big)
+                self.assertEqual(status, "failed")
+                self.assertIsNone(out)
+                self.assertFalse(tmp.exists())
+                self.assertFalse(dest.exists())
+                with patch("video_tools.subprocess.run", side_effect=reject):
+                    status, out = ensure_clip_proxy(big)
+                self.assertEqual(status, "failed")
+                self.assertFalse(dest.exists())
+                self.assertFalse(tmp.exists())
+
+                def ok(cmd, **kwargs):
+                    self.assertNotIn("timeout", kwargs)
+                    Path(cmd[-1]).write_bytes(b"x" * 4000)
+                    return subprocess.CompletedProcess(cmd, 0)
+
+                with patch("video_tools.subprocess.run", side_effect=ok):
+                    status, out = ensure_clip_proxy(big)
+                self.assertEqual(status, "ready")
+                self.assertTrue(dest.is_file())
+                self.assertGreater(dest.stat().st_size, 2000)
+                self.assertFalse(tmp.exists())
+            finally:
+                tmp.unlink(missing_ok=True)
+                dest.unlink(missing_ok=True)
+
 
 class ExportPathTests(unittest.TestCase):
     def test_normalize_segment_speed_keeps_out_duration(self):
@@ -3176,6 +3229,35 @@ class FrontendWriterContractTests(unittest.TestCase):
         self.assertIn("function sceneDur(s)", src)
         self.assertIn("if (s.freeze)", src)
 
+    def test_assemble_poster_until_proxy_and_mic_server_path(self):
+        src = self.create
+        self.assertIn('id="previewPoster"', src)
+        self.assertIn("function showStagePoster(", src)
+        kick = src[src.find("function kickProxy("):src.find("function posterUrl(")]
+        self.assertIn("syncPreview(currentTime, isPlaying)", kick)
+        preview = src[src.find("function syncPreview("):src.find("function updateHud(")]
+        self.assertIn("showStagePoster(", preview)
+        self.assertIn("proxyResolved(", preview)
+        tools = src[src.find('id="sceneTools"'):src.find('id="editThisClip"')]
+        self.assertIn('id="sceneMicBox"', tools)
+        self.assertLess(tools.find('id="sceneMicBox"'), tools.find("sceneSplit()"))
+        self.assertIn("Usar recording.2026-10-01-102704.caf", src)
+        self.assertIn("storage/uploads/recording.2026-10-01-102704.caf", src)
+        self.assertIn("Música de fondo", src)
+        tag_at = src.find('<input id="sceneMicOffset"')
+        self.assertGreater(tag_at, 0)
+        tag = src[tag_at:src.find(">", tag_at)]
+        self.assertNotIn("value=", tag)
+        mic = src[src.find("async function saveSceneMic("):src.find("function sceneSplit(")]
+        self.assertIn('fetch("/api/clips/replace-audio"', mic)
+        self.assertIn('fd.append("audio_path", serverPath)', mic)
+        self.assertIn("syncPreview(currentTime, false)", mic)
+        self.assertIn("puede tardar", mic)
+        self.assertNotIn('fetch("/uploads/', mic)
+        self.assertNotIn(".blob()", mic)
+        self.assertNotIn("/api/sequence/music", mic)
+        self.assertNotIn("replaceAudio", mic)
+
     def test_assemble_drag_trim_matches_edit(self):
         src = self.create
         self.assertIn("function layoutSceneTrim(", src)
@@ -3885,6 +3967,56 @@ class ReplaceMicAudioTests(unittest.TestCase):
         self.assertIn('fetch("/api/clips/replace-audio"', mic_fn)
         self.assertNotIn("/api/sequence/music", mic_fn)
         self.assertNotIn("replaceAudio", mic_fn)
+        self._assert_bed_and_sequence()
+
+    def test_audio_path_reads_uploads_and_offset_stays_required(self):
+        src = self.clips / "pixel_interview.mp4"
+        wav = self.media / "ocenaudio.wav"
+        uploads = Path(self.tmp.name) / "uploads"
+        uploads.mkdir()
+        caf = uploads / "recording.2026-10-01-102704.caf"
+        self._video(src)
+        self._mic(wav)
+        ff = ffmpeg_bin()
+        r = self._ff([
+            ff, "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(wav), "-c:a", "pcm_s16le", str(caf),
+        ])
+        if r.returncode != 0 or not caf.is_file():
+            self.skipTest("could not write caf")
+        caf_hash = self._sha(caf)
+        src_hash = self._sha(src)
+        before = {p.name for p in self.clips.iterdir()}
+        with self._dirs()[0], self._dirs()[1], patch("main.UPLOADS_DIR", uploads):
+            with patch("main.attach_clip_to_active_project", return_value=[]):
+                with patch("main.persist_sequence_music", side_effect=AssertionError("bed music")):
+                    client = self._client()
+                    missing = client.post("/api/clips/replace-audio", data={
+                        "clip_id": src.name,
+                        "audio_path": "storage/uploads/recording.2026-10-01-102704.caf",
+                    })
+                    bed = client.post("/api/clips/replace-audio", data={
+                        "clip_id": src.name,
+                        "offset_ms": "0",
+                        "audio_path": "storage/autosave/music.mp3",
+                    })
+                    baked = client.post("/api/clips/replace-audio", data={
+                        "clip_id": src.name,
+                        "offset_ms": "0",
+                        "audio_path": "/uploads/recording.2026-10-01-102704.caf",
+                    })
+        self.assertEqual(missing.status_code, 400, missing.text)
+        self.assertEqual(bed.status_code, 400, bed.text)
+        self.assertEqual(baked.status_code, 200, baked.text)
+        data = baked.json()
+        self.assertEqual(data.get("offset_ms"), 0)
+        self.assertEqual(data.get("source"), src.name)
+        out = self.clips / data["filename"]
+        self.assertTrue(out.is_file())
+        self.assertNotEqual(out.name, src.name)
+        self.assertEqual({p.name for p in self.clips.iterdir()}, before | {out.name})
+        self.assertEqual(self._sha(src), src_hash)
+        self.assertEqual(self._sha(caf), caf_hash)
         self._assert_bed_and_sequence()
 
     def test_scene_ref_save_after_bake_rejects_stale_rev(self):

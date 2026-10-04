@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from pathlib import Path
 from urllib.parse import unquote
 import asyncio
@@ -1016,27 +1016,63 @@ async def _stash_mic_upload(file: UploadFile) -> Path:
     return tmp
 
 
+def _resolve_mic_audio_path(raw: str) -> Path:
+    """Basename under storage/uploads. Never the bed track in autosave."""
+    text = (raw or "").strip().replace("\\", "/")
+    if not text:
+        raise HTTPException(status_code=400, detail="Elige el audio de micrófono o una ruta en uploads.")
+    low = text.lower()
+    if "music.mp3" in low or "/autosave/" in low or low.startswith("autosave/"):
+        raise HTTPException(status_code=400, detail="Ese archivo no es el audio de micrófono")
+    name = Path(text).name
+    if not name or name in {".", ".."} or Path(name).suffix.lower() not in MIC_AUDIO_EXT:
+        raise HTTPException(status_code=400, detail="Usa CAF, WAV, MP3 o M4A")
+    path = (UPLOADS_DIR / name).resolve()
+    try:
+        uploads_root = UPLOADS_DIR.resolve()
+        bed = sequence_music_path().resolve()
+    except OSError:
+        raise HTTPException(status_code=400, detail="La ruta tiene que estar en uploads")
+    if path == bed or path.parent != uploads_root:
+        raise HTTPException(status_code=400, detail="La ruta tiene que estar en uploads")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No está ese audio en uploads")
+    return path
+
+
+async def _mic_source(audio: Optional[UploadFile], audio_path: str) -> Tuple[Path, Optional[Path]]:
+    """Return (readable audio, temp file to delete). Server path is not copied."""
+    if audio is not None and (audio.filename or "").strip():
+        tmp = await _stash_mic_upload(audio)
+        return tmp, tmp
+    if (audio_path or "").strip():
+        return _resolve_mic_audio_path(audio_path), None
+    raise HTTPException(status_code=400, detail="Elige el audio de micrófono o una ruta en uploads.")
+
+
 async def _run_replace_audio(
     clip_id: str,
     offset_raw: Optional[str],
-    audio: UploadFile,
+    audio: Optional[UploadFile],
     label: str,
     dest_dir: Path,
+    audio_path: str = "",
 ):
     offset = _parse_offset_ms(offset_raw)
     video = _library_clip_file(clip_id)
-    tmp = await _stash_mic_upload(audio)
+    src_audio, tmp = await _mic_source(audio, audio_path)
     try:
         ok, message, dest = await asyncio.to_thread(
             replace_clip_audio,
             video,
-            tmp,
+            src_audio,
             offset,
             (label or "").strip(),
             dest_dir,
         )
     finally:
-        tmp.unlink(missing_ok=True)
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
     if not ok or not dest:
         raise HTTPException(status_code=500, detail=message or "No se pudo reemplazar el audio")
     try:
@@ -1055,13 +1091,18 @@ async def replace_clip_audio_route(
     clip_id: str = Form(""),
     offset_ms: Optional[str] = Form(None),
     label: str = Form(""),
-    audio: UploadFile = File(...),
+    audio_path: str = Form(""),
+    audio: Optional[UploadFile] = File(None),
 ):
-    """Mux a mic recording onto a Library video. New clip only. Sequence stays put."""
+    """Mux a mic recording onto a Library video. New clip only. Sequence stays put.
+
+    audio is an uploaded file. audio_path is a name already under storage/uploads
+    (the server reads it; the browser does not re-upload the bytes).
+    """
     if not check_ffmpeg():
         raise HTTPException(status_code=500, detail="FFmpeg no está disponible")
     video, dest, offset, duration = await _run_replace_audio(
-        clip_id, offset_ms, audio, label, CLIPS_DIR,
+        clip_id, offset_ms, audio, label, CLIPS_DIR, audio_path,
     )
     attach_clip_to_active_project(dest.name)
     return {
@@ -1083,14 +1124,15 @@ async def replace_clip_audio_preview(
     clip_id: str = Form(""),
     offset_ms: Optional[str] = Form(None),
     label: str = Form(""),
-    audio: UploadFile = File(...),
+    audio_path: str = Form(""),
+    audio: Optional[UploadFile] = File(None),
 ):
     """Same mux as replace-audio, written only under storage/exports/tmp."""
     if not check_ffmpeg():
         raise HTTPException(status_code=500, detail="FFmpeg no está disponible")
     EXPORTS_TMP.mkdir(parents=True, exist_ok=True)
     _video, dest, offset, duration = await _run_replace_audio(
-        clip_id, offset_ms, audio, label or "preview_mic", EXPORTS_TMP,
+        clip_id, offset_ms, audio, label or "preview_mic", EXPORTS_TMP, audio_path,
     )
     return {
         "ok": True,
