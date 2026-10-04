@@ -3522,6 +3522,9 @@ class ReplaceMicAudioTests(unittest.TestCase):
         self.music_existed = self.music_path.is_file()
         self.seq_before = self.seq_path.read_bytes() if self.seq_existed else None
         self.music_before = self.music_path.read_bytes() if self.music_existed else None
+        self.bak_path = self.seq_path.with_name("sequence.bak.json")
+        self.bak_existed = self.bak_path.is_file()
+        self.bak_before = self.bak_path.read_bytes() if self.bak_existed else None
         if not self.music_existed:
             self.music_path.parent.mkdir(parents=True, exist_ok=True)
             self.music_path.write_bytes(b"\xff\xfb" + b"\x11" * 480)
@@ -3535,11 +3538,15 @@ class ReplaceMicAudioTests(unittest.TestCase):
         try:
             if self.seq_existed:
                 self.seq_path.write_bytes(self.seq_before)
-            elif self.seq_path.is_file() and self.seq_path.read_bytes() == self.seq_before:
+            elif self.seq_path.is_file():
                 self.seq_path.unlink()
+            if self.bak_existed:
+                self.bak_path.write_bytes(self.bak_before)
+            elif self.bak_path.is_file():
+                self.bak_path.unlink()
             if self.music_existed:
                 self.music_path.write_bytes(self.music_before)
-            elif self.music_path.is_file() and self.music_path.read_bytes() == self.music_before:
+            elif self.music_path.is_file():
                 self.music_path.unlink()
         except Exception:
             pass
@@ -3784,9 +3791,100 @@ class ReplaceMicAudioTests(unittest.TestCase):
             self.assertIn("Guardar clip nuevo", page)
             self.assertIn('fetch("/api/clips/replace-audio"', page)
             self.assertIn('fetch("/api/clips/replace-audio/preview"', page)
-        self.assertNotIn("replace-audio", assemble)
+        self.assertIn("Audio de micrófono", assemble)
+        self.assertIn("Desfase (ms)", assemble)
+        self.assertIn("Guardar en esta escena", assemble)
+        self.assertIn(
+            "Crea un clip nuevo en Library y lo pone en esta escena. El original no se toca. No es la música de fondo.",
+            assemble,
+        )
+        self.assertIn("Música de fondo", assemble)
+        self.assertIn("storage/uploads/recording.2026-10-01-102704.caf", assemble)
+        self.assertIn('fetch("/api/clips/replace-audio"', assemble)
         self.assertNotIn("replaceAudio", assemble)
+        mic_fn = assemble[assemble.find("async function saveSceneMic("):assemble.find("function sceneSplit(")]
+        self.assertIn('fetch("/api/clips/replace-audio"', mic_fn)
+        self.assertNotIn("/api/sequence/music", mic_fn)
+        self.assertNotIn("replaceAudio", mic_fn)
         self._assert_bed_and_sequence()
+
+    def test_scene_ref_save_after_bake_rejects_stale_rev(self):
+        src = self.clips / "pixel_interview.mp4"
+        mic = self.media / "ocenaudio.wav"
+        self._video(src)
+        self._mic(mic)
+        src_hash = self._sha(src)
+        from video_create import load_sequence, save_sequence
+        lib = [
+            {"name": "pixel_interview.mp4", "duration": 2.0},
+            {"name": "otro.mp4", "duration": 2.0},
+        ]
+        save_sequence({
+            "title": "Entrevista",
+            "format": "youtube",
+            "rev": 1,
+            "scenes": [
+                {"id": "s-a", "clip": "pixel_interview.mp4", "inPoint": 0, "outPoint": 2},
+                {"id": "s-b", "clip": "otro.mp4", "inPoint": 0, "outPoint": 2, "text": "sigue"},
+            ],
+        }, library=lib, force=True)
+        seeded = self.seq_path.read_bytes()
+        music_now = self.music_path.read_bytes()
+        with self._dirs()[0], self._dirs()[1]:
+            with patch("main.attach_clip_to_active_project", return_value=[]):
+                with patch("main.persist_sequence_music", side_effect=AssertionError("bed music")):
+                    client = self._client()
+                    baked_res = self._post(client, src.name, "0", mic, label="escena_mic")
+        self.assertEqual(baked_res.status_code, 200, baked_res.text)
+        baked_name = baked_res.json()["filename"]
+        self.assertEqual(self.seq_path.read_bytes(), seeded)
+        self.assertEqual(self._sha(src), src_hash)
+        self.assertEqual(self.music_path.read_bytes(), music_now)
+        seq, _src = load_sequence()
+        self.assertEqual(seq["scenes"][0]["clip"], "pixel_interview.mp4")
+        self.assertEqual(seq["scenes"][1]["clip"], "otro.mp4")
+        self.assertNotIn("replaceAudio", seq["scenes"][0])
+        used_rev = seq["rev"]
+        seq["scenes"][0]["clip"] = baked_name
+        seq["scenes"][0]["src"] = "/clips/" + baked_name
+        seq["scenes"][0]["url"] = "/clips/" + baked_name
+        lib2 = lib + [{"name": baked_name, "duration": 2.0}]
+        with patch("video_create.list_library_clips", return_value=lib2):
+            client = self._client()
+            saved = client.post("/api/sequence", json=seq)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        body = saved.json()
+        self.assertTrue(body.get("ok"), body)
+        scenes = body["sequence"]["scenes"]
+        self.assertEqual(scenes[0]["id"], "s-a")
+        self.assertEqual(scenes[0]["clip"], baked_name)
+        self.assertEqual(scenes[1]["id"], "s-b")
+        self.assertEqual(scenes[1]["clip"], "otro.mp4")
+        self.assertEqual(scenes[1].get("text"), "sigue")
+        self.assertNotIn("replaceAudio", scenes[0])
+        self.assertNotIn("replaceAudio", scenes[1])
+        self.assertEqual(self._sha(src), src_hash)
+        self.assertEqual(self.music_path.read_bytes(), music_now)
+        disk_after = self.seq_path.read_bytes()
+        self.assertNotEqual(disk_after, seeded)
+        stale_body = json.loads(json.dumps(body["sequence"]))
+        stale_body["rev"] = used_rev
+        stale_body["scenes"][0]["clip"] = "should-not-land.mp4"
+        stale_body["scenes"][1]["clip"] = "should-not-land.mp4"
+        with patch("video_create.list_library_clips", return_value=lib2):
+            client = self._client()
+            stale = client.post("/api/sequence", json=stale_body)
+        self.assertEqual(stale.status_code, 200, stale.text)
+        stale_data = stale.json()
+        self.assertFalse(stale_data.get("ok"))
+        self.assertTrue(stale_data.get("stale"))
+        self.assertEqual(stale_data["source"], "stale")
+        self.assertEqual(self.seq_path.read_bytes(), disk_after)
+        disk_seq, _disk_src = load_sequence()
+        self.assertEqual(disk_seq["scenes"][0]["clip"], baked_name)
+        self.assertEqual(disk_seq["scenes"][1]["clip"], "otro.mp4")
+        self.assertEqual(self._sha(src), src_hash)
+        self.assertEqual(self.music_path.read_bytes(), music_now)
 
 
 if __name__ == "__main__":

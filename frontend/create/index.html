@@ -280,7 +280,7 @@
           <span id="timecode" class="font-mono text-xs text-neutral-400">0:00 / 0:00</span>
           <input type="range" id="seekBar" min="0" max="1000" value="0" class="flex-1 accent-green-500">
           <input type="file" id="musicFile" class="hidden" accept=".mp3,.wav,.m4a,.aac,audio/mpeg,audio/wav,audio/mp4,audio/aac" onchange="pickSequenceMusic(this)">
-          <button type="button" class="tool" onclick="$('musicFile').click()">Canción</button>
+          <button type="button" class="tool" onclick="$('musicFile').click()">Música de fondo</button>
           <input type="range" id="musicVol" min="0" max="100" value="25" class="w-20 accent-green-500" oninput="setMusicVolume(this.value/100, false)" onchange="setMusicVolume(this.value/100, true)">
           <span id="musicVolLbl" class="text-[10px] text-neutral-400 w-8">25%</span>
           <span id="musicNameLbl" class="text-[10px] text-neutral-500 max-w-[140px] truncate"></span>
@@ -327,6 +327,17 @@
           <button type="button" class="tool" onclick="applyFitToAll()">Aplicar a todas las escenas</button>
         </div>
         <a class="tool mt-2 inline-block" id="editThisClip" href="/editor" onclick="editThisClip(); return false;">Editar este clip</a>
+        <div class="mt-3 border-t border-neutral-800 pt-2" id="sceneMicBox">
+          <button type="button" class="tool" id="sceneMicBtn" onclick="$('sceneMicFile').click()">Audio de micrófono</button>
+          <p class="text-[10px] text-neutral-500 mt-1">Crea un clip nuevo en Library y lo pone en esta escena. El original no se toca. No es la música de fondo.</p>
+          <input id="sceneMicFile" type="file" accept=".caf,.wav,.mp3,.m4a,audio/*" class="text-xs mt-2 block">
+          <label class="block text-[10px] text-neutral-500 mt-2" for="sceneMicPath">Ruta en uploads</label>
+          <input id="sceneMicPath" type="text" placeholder="storage/uploads/recording.2026-10-01-102704.caf" class="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs mt-1">
+          <label class="block text-[10px] text-neutral-500 mt-2" for="sceneMicOffset">Desfase (ms)</label>
+          <input id="sceneMicOffset" type="number" step="1" inputmode="numeric" required placeholder="ej. -120" class="w-28 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs mt-1">
+          <button type="button" class="tool mt-2" onclick="saveSceneMic()">Guardar en esta escena</button>
+          <p id="sceneMicMsg" class="text-[10px] text-neutral-400 mt-1"></p>
+        </div>
         <div class="flex items-center gap-2 mt-2">
           <span class="text-[10px] text-neutral-500">VO</span>
           <input type="range" id="voRate" min="50" max="150" value="100" step="5" class="flex-1 accent-green-500" oninput="sceneSetVoRate(this.value/100, false)" onchange="sceneSetVoRate(this.value/100, true)">
@@ -1494,6 +1505,81 @@
       currentTime = s.timelineStart;
       renderAll();
       syncPreview(currentTime, false);
+    }
+    function readSceneMicOffset() {
+      var raw = String(($("sceneMicOffset") && $("sceneMicOffset").value) || "").trim();
+      if (!/^[+-]?\d+$/.test(raw)) return null;
+      return raw;
+    }
+    async function sceneMicAudioFile() {
+      var input = $("sceneMicFile");
+      if (input && input.files && input.files[0]) return input.files[0];
+      var raw = String(($("sceneMicPath") && $("sceneMicPath").value) || "").trim();
+      if (!raw) return null;
+      var name = raw.split(/[\\/]/).pop();
+      if (!name || !/\.(caf|wav|mp3|m4a)$/i.test(name)) {
+        throw new Error("Usa CAF, WAV, MP3 o M4A");
+      }
+      var res = await fetch("/uploads/" + encodeURIComponent(name));
+      if (!res.ok) throw new Error("No está ese audio en uploads");
+      var blob = await res.blob();
+      return new File([blob], name, { type: blob.type || "application/octet-stream" });
+    }
+    async function saveSceneMic() {
+      var msg = $("sceneMicMsg");
+      var s = active();
+      if (!s) {
+        if (msg) msg.textContent = "Elige una escena.";
+        return;
+      }
+      var clipId = fileName(s.clip || s.src || s.url || "");
+      if (!clipId) {
+        if (msg) msg.textContent = "Esta escena no tiene clip.";
+        return;
+      }
+      var offset = readSceneMicOffset();
+      if (offset === null) {
+        if (msg) msg.textContent = "Escribe el desfase en milisegundos antes de guardar.";
+        return;
+      }
+      var file;
+      try {
+        file = await sceneMicAudioFile();
+      } catch (e) {
+        if (msg) msg.textContent = e.message || "No se pudo leer el audio";
+        return;
+      }
+      if (!file) {
+        if (msg) msg.textContent = "Elige el audio de micrófono o una ruta en uploads.";
+        return;
+      }
+      var fd = new FormData();
+      fd.append("clip_id", clipId);
+      fd.append("offset_ms", offset);
+      fd.append("audio", file);
+      if (msg) msg.textContent = "Creando clip nuevo…";
+      try {
+        var res = await fetch("/api/clips/replace-audio", { method: "POST", body: fd });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) {
+          var detail = data && data.detail;
+          throw new Error(typeof detail === "string" ? detail : "No se pudo reemplazar el audio");
+        }
+        var name = data.filename || data.name;
+        if (!name) throw new Error("No se pudo reemplazar el audio");
+        s.clip = name;
+        s.name = name;
+        s.src = data.url || ("/clips/" + encodeURIComponent(name));
+        s.url = s.src;
+        if (typeof library !== "undefined" && library && !library.some(function (c) { return c.name === name; })) {
+          library.push({ name: name, title: data.title || name, duration: data.duration || 0, url: s.src });
+        }
+        if (msg) msg.textContent = "Clip nuevo en esta escena: " + name;
+        renderAll();
+        lockSave();
+      } catch (e) {
+        if (msg) msg.textContent = e.message;
+      }
     }
 
     function sceneSplit() {
@@ -3594,6 +3680,7 @@
       if (vsEl && document.activeElement !== vsEl) vsEl.value = plan.script;
       plan.scenes = (plan.scenes || []).map(function (s, i) {
         var n = makeScene(s.clip, i);
+        if (s.id) n.id = s.id;
         n.url = s.src || s.url || n.url;
         n.inPoint = Number(s.inPoint) || 0;
         n.outPoint = Number(s.outPoint) || n.outPoint;
