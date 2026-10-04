@@ -14,6 +14,7 @@ import asyncio
 import json
 import re
 import shutil
+import threading
 import uuid
 import uvicorn
 
@@ -63,6 +64,7 @@ from video_tools import (
     proxy_needed,
     proxy_path,
     proxy_is_fresh,
+    drop_incomplete_proxy,
     move_clip_proxy,
     delete_clip_proxy,
     PROXIES_DIR,
@@ -794,10 +796,15 @@ async def clip_poster(name: str = "", t: float = 0.0, make: int = 0):
     return FileResponse(str(made), media_type="image/jpeg")
 
 
+_proxy_jobs: set = set()
+_proxy_jobs_lock = threading.Lock()
+
+
 def _proxy_info(path: Path) -> dict:
     dest = proxy_path(path.name)
     if not proxy_needed(path):
         return {"ready": False, "skipped": True, "url": None, "name": path.name}
+    drop_incomplete_proxy(path, dest)
     if proxy_is_fresh(path, dest):
         return {"ready": True, "skipped": False, "url": f"/proxies/{path.name}", "name": path.name}
     return {"ready": False, "skipped": False, "url": None, "name": path.name}
@@ -807,18 +814,27 @@ def _proxy_info(path: Path) -> dict:
 async def clip_proxy_status(name: str = ""):
     """Preview proxy status. Original stays in storage/clips; this is optional 540p."""
     path = _resolve_named_media(name)
-    return _proxy_info(path)
+    return await asyncio.to_thread(_proxy_info, path)
 
 
 @app.post("/api/clips/proxy")
 async def clip_proxy_make(background_tasks: BackgroundTasks, name: str = ""):
     path = _resolve_named_media(name)
-    info = _proxy_info(path)
+    info = await asyncio.to_thread(_proxy_info, path)
     if info["skipped"] or info["ready"]:
         return info
+    with _proxy_jobs_lock:
+        if path.name in _proxy_jobs:
+            info["started"] = True
+            return info
+        _proxy_jobs.add(path.name)
 
     def _job(p: Path) -> None:
-        ensure_clip_proxy(p)
+        try:
+            ensure_clip_proxy(p)
+        finally:
+            with _proxy_jobs_lock:
+                _proxy_jobs.discard(p.name)
 
     background_tasks.add_task(_job, path)
     info["started"] = True

@@ -39,6 +39,12 @@
       object-fit: contain; z-index: 2; display: none; background: #000; pointer-events: none;
     }
     #previewPoster.is-on { display: block; }
+    #previewPosterNote {
+      display: none; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+      z-index: 3; margin: 0; padding: 4px 10px; border-radius: 999px;
+      background: rgba(0, 0, 0, 0.72); color: #e5e5e5; font-size: 12px; pointer-events: none;
+    }
+    #previewPosterNote.is-on { display: block; }
     #textOverlays {
       position: absolute; inset: 0; z-index: 3; pointer-events: none;
     }
@@ -304,6 +310,7 @@
           <video id="preview-video" class="preview-el is-front" playsinline muted></video>
           <video id="preview-video-b" class="preview-el is-back" playsinline muted></video>
           <img id="previewPoster" alt="">
+          <p id="previewPosterNote">Preparando vista previa…</p>
           <div id="textOverlays"></div>
           <div id="emptyPreview" class="absolute inset-0 flex items-center justify-center text-neutral-600 text-sm">Clic un clip a la izquierda o pulsa +</div>
         </div>
@@ -1394,6 +1401,8 @@
       var key = fileName(name) + "@" + (Math.round((Number(t) || 0) * 10) / 10);
       img.style.objectFit = fit === "cover" ? "cover" : "contain";
       img.classList.add("is-on");
+      var note = $("previewPosterNote");
+      if (note) note.classList.add("is-on");
       if (img.dataset.key === key && img.getAttribute("src")) return;
       img.dataset.key = key;
       var url = posterUrl(name, t);
@@ -1417,6 +1426,8 @@
     function hideStagePoster() {
       var img = $("previewPoster");
       if (img) img.classList.remove("is-on");
+      var note = $("previewPosterNote");
+      if (note) note.classList.remove("is-on");
     }
     function syncPreview(t, play) {
       var s = sceneAt(t);

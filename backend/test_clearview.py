@@ -2495,6 +2495,12 @@ class PreviewPerfTests(unittest.TestCase):
 
                 with patch("video_tools.subprocess.run", side_effect=ok):
                     status, out = ensure_clip_proxy(big)
+                self.assertEqual(status, "failed")
+                self.assertIsNone(out)
+                self.assertFalse(dest.exists())
+                with patch("video_tools.probe_duration", return_value=2700.0):
+                    with patch("video_tools.subprocess.run", side_effect=ok):
+                        status, out = ensure_clip_proxy(big)
                 self.assertEqual(status, "ready")
                 self.assertTrue(dest.is_file())
                 self.assertGreater(dest.stat().st_size, 2000)
@@ -2502,6 +2508,104 @@ class PreviewPerfTests(unittest.TestCase):
             finally:
                 tmp.unlink(missing_ok=True)
                 dest.unlink(missing_ok=True)
+                (PROXIES_DIR / (big.name + ".duration.json")).unlink(missing_ok=True)
+
+    def test_truncated_proxy_is_not_ready_and_is_deleted(self):
+        if not check_ffmpeg():
+            self.skipTest("ffmpeg not installed")
+        ff = ffmpeg_bin()
+        import os
+        from video_tools import _run, PROXIES_DIR, proxy_is_fresh, drop_incomplete_proxy
+        PROXIES_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as d:
+            clip = Path(d) / "src_entrevista.mp4"
+            short = Path(d) / "short_proxy.mp4"
+            full = Path(d) / "full_proxy.mp4"
+
+            def mux(dest, seconds, color, size="160x90"):
+                return _run([
+                    ff, "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "color=c=%s:s=%s:d=%s:r=15" % (color, size, seconds),
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(dest),
+                ])
+
+            if mux(clip, 6, "blue").returncode != 0 or not clip.is_file():
+                self.skipTest("could not mux source")
+            if mux(short, 1, "red", "1280x720").returncode != 0 or not short.is_file():
+                self.skipTest("could not mux short proxy")
+            if mux(full, 6, "green").returncode != 0 or not full.is_file():
+                self.skipTest("could not mux full proxy")
+            dest = PROXIES_DIR / clip.name
+            cache = PROXIES_DIR / (clip.name + ".duration.json")
+            try:
+                dest.write_bytes(short.read_bytes())
+                now = time.time() + 30
+                os.utime(dest, (now, now))
+                self.assertGreater(dest.stat().st_size, 2000)
+                self.assertGreaterEqual(dest.stat().st_mtime, clip.stat().st_mtime)
+                self.assertFalse(proxy_is_fresh(clip, dest))
+                self.assertTrue(drop_incomplete_proxy(clip, dest))
+                self.assertFalse(dest.exists())
+                dest.write_bytes(full.read_bytes())
+                os.utime(dest, (now, now))
+                self.assertTrue(proxy_is_fresh(clip, dest))
+                self.assertFalse(drop_incomplete_proxy(clip, dest))
+                self.assertTrue(dest.is_file())
+            finally:
+                dest.unlink(missing_ok=True)
+                cache.unlink(missing_ok=True)
+
+    def test_api_truncated_proxy_is_not_served_ready(self):
+        if not check_ffmpeg():
+            self.skipTest("ffmpeg not installed")
+        ff = ffmpeg_bin()
+        import os
+        from video_tools import _run
+        from fastapi.testclient import TestClient
+        from main import app
+        with tempfile.TemporaryDirectory() as d:
+            clips = Path(d) / "clips"
+            proxies = Path(d) / "proxies"
+            clips.mkdir()
+            proxies.mkdir()
+            clip = clips / "entrevista_erick_vallester_2.mp4"
+            short = Path(d) / "short.mp4"
+            full = Path(d) / "full.mp4"
+
+            def mux(dest, seconds, color, size="160x90"):
+                return _run([
+                    ff, "-y", "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i", "color=c=%s:s=%s:d=%s:r=15" % (color, size, seconds),
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(dest),
+                ])
+
+            if mux(clip, 6, "blue").returncode != 0 or mux(short, 1, "red", "1280x720").returncode != 0 or mux(full, 6, "green").returncode != 0:
+                self.skipTest("could not mux proxy fixtures")
+            dest = proxies / clip.name
+            dest.write_bytes(short.read_bytes())
+            now = time.time() + 30
+            os.utime(dest, (now, now))
+            src_bytes = clip.read_bytes()
+            with patch("video_tools.PROXIES_DIR", proxies), patch("main.CLIPS_DIR", clips), patch("main.proxy_needed", return_value=True):
+                client = TestClient(app)
+                res = client.get("/api/clips/proxy", params={"name": clip.name})
+            self.assertEqual(res.status_code, 200, res.text)
+            body = res.json()
+            self.assertFalse(body.get("ready"), body)
+            self.assertFalse(body.get("skipped"), body)
+            self.assertIsNone(body.get("url"))
+            self.assertFalse(dest.exists())
+            self.assertEqual(clip.read_bytes(), src_bytes)
+            dest.write_bytes(full.read_bytes())
+            os.utime(dest, (now, now))
+            with patch("video_tools.PROXIES_DIR", proxies), patch("main.CLIPS_DIR", clips), patch("main.proxy_needed", return_value=True):
+                client = TestClient(app)
+                res = client.get("/api/clips/proxy", params={"name": clip.name})
+            self.assertEqual(res.status_code, 200, res.text)
+            body = res.json()
+            self.assertTrue(body.get("ready"), body)
+            self.assertEqual(body.get("url"), "/proxies/" + clip.name)
+            self.assertTrue(dest.is_file())
 
 
 class ExportPathTests(unittest.TestCase):
@@ -3232,6 +3336,7 @@ class FrontendWriterContractTests(unittest.TestCase):
     def test_assemble_poster_until_proxy_and_mic_server_path(self):
         src = self.create
         self.assertIn('id="previewPoster"', src)
+        self.assertIn("Preparando vista previa…", src)
         self.assertIn("function showStagePoster(", src)
         kick = src[src.find("function kickProxy("):src.find("function posterUrl(")]
         self.assertIn("syncPreview(currentTime, isPlaying)", kick)

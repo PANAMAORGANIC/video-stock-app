@@ -682,7 +682,7 @@ def strip_captions(
     return True, f"Subtítulos de pista quitados: {final.name}", final
 
 
-def get_video_info(path: Path) -> dict:
+def get_video_info(path: Path, timeout: float = 8) -> dict:
     """Obtiene duración y streams con ffprobe."""
     probe = ffprobe_bin()
     if not probe or not path.exists():
@@ -695,7 +695,7 @@ def get_video_info(path: Path) -> dict:
     ]
     try:
         kwargs = _win_kwargs()
-        kwargs["timeout"] = 8
+        kwargs["timeout"] = timeout
         result = subprocess.run(cmd, **kwargs)
         if result.returncode != 0 or not result.stdout.strip():
             return {}
@@ -704,8 +704,8 @@ def get_video_info(path: Path) -> dict:
         return {}
 
 
-def probe_duration(path: Path) -> Optional[float]:
-    info = get_video_info(path)
+def probe_duration(path: Path, timeout: float = 8) -> Optional[float]:
+    info = get_video_info(path, timeout=timeout)
     try:
         dur = float(info.get("format", {}).get("duration") or 0)
         return dur if dur > 0 else None
@@ -884,6 +884,8 @@ def delete_peaks_sidecar(path: Path) -> None:
 POSTER_WIDTH = 320
 PROXY_MIN_BYTES = 15 * 1024 * 1024
 PROXY_HEIGHT = 540
+# A killed 180s encode of a 45 min source is minutes short, not 3s short.
+PROXY_DURATION_SLACK = 3.0
 _proxy_gen_lock = threading.Lock()
 
 
@@ -1003,13 +1005,74 @@ def proxy_needed(path: Path) -> bool:
         return False
 
 
-def proxy_is_fresh(src: Path, dest: Path) -> bool:
+def _proxy_duration_cache(src: Path) -> Path:
+    return PROXIES_DIR / (Path(src).name + ".duration.json")
+
+
+def cached_source_duration(src: Path) -> Optional[float]:
+    """Source duration, remembered beside the proxy so a 6 GB HEVC is probed once."""
+    src = Path(src)
+    cache = _proxy_duration_cache(src)
     try:
-        return (
+        if cache.is_file() and cache.stat().st_mtime >= src.stat().st_mtime:
+            dur = float(json.loads(cache.read_text(encoding="utf-8")).get("duration") or 0)
+            if dur > 0:
+                return dur
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    dur = probe_duration(src, timeout=300)
+    if not dur:
+        return None
+    try:
+        PROXIES_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"duration": dur}), encoding="utf-8")
+    except OSError:
+        pass
+    return dur
+
+
+def proxy_covers_source(src: Path, dest: Path) -> bool:
+    """True when dest is a finished proxy: its duration matches the source."""
+    src_d = cached_source_duration(src)
+    dst_d = probe_duration(dest, timeout=20)
+    if not src_d or not dst_d:
+        return False
+    return abs(dst_d - src_d) <= PROXY_DURATION_SLACK
+
+
+def proxy_is_fresh(src: Path, dest: Path) -> bool:
+    """Ready only when the proxy file is newer than the source and covers its duration."""
+    try:
+        if not (
             dest.is_file()
             and dest.stat().st_size > 2000
             and dest.stat().st_mtime >= src.stat().st_mtime
-        )
+        ):
+            return False
+    except OSError:
+        return False
+    return proxy_covers_source(src, dest)
+
+
+def drop_incomplete_proxy(src: Path, dest: Path) -> bool:
+    """Delete a proxy that is on disk but does not cover the source. Leave the source."""
+    src, dest = Path(src), Path(dest)
+    try:
+        if not dest.is_file() or dest.stat().st_size <= 2000:
+            return False
+        if dest.resolve() == src.resolve():
+            return False
+        if dest.stat().st_mtime < src.stat().st_mtime:
+            return False
+    except OSError:
+        return False
+    if not cached_source_duration(src):
+        return False
+    if proxy_covers_source(src, dest):
+        return False
+    try:
+        dest.unlink()
+        return True
     except OSError:
         return False
 
@@ -1025,6 +1088,7 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
     dest = proxy_path(path.name)
     if proxy_is_fresh(path, dest):
         return "ready", dest
+    drop_incomplete_proxy(path, dest)
     if not check_ffmpeg():
         return "failed", None
     ff = ffmpeg_bin()
@@ -1033,6 +1097,7 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
     with _proxy_gen_lock:
         if proxy_is_fresh(path, dest):
             return "ready", dest
+        drop_incomplete_proxy(path, dest)
         tmp = dest.with_name(dest.name + ".tmp.mp4")
         tries = [
             [
@@ -1068,7 +1133,12 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                 except (OSError, subprocess.SubprocessError):
                     _drop_tmp()
                     continue
-                if r.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 2000:
+                if (
+                    r.returncode == 0
+                    and tmp.is_file()
+                    and tmp.stat().st_size > 2000
+                    and proxy_covers_source(path, tmp)
+                ):
                     try:
                         if dest.exists():
                             dest.unlink()
@@ -1079,7 +1149,9 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                         except Exception:
                             _drop_tmp()
                             return "failed", None
-                    return ("ready", dest) if dest.is_file() else ("failed", None)
+                    if dest.is_file() and proxy_covers_source(path, dest):
+                        return "ready", dest
+                    return "failed", None
                 _drop_tmp()
             return "failed", None
         finally:
