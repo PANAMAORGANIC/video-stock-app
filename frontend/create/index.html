@@ -34,6 +34,17 @@
     }
     #previewStage .preview-el.is-front { opacity: 1; z-index: 1; pointer-events: auto; visibility: visible; }
     #previewStage .preview-el.is-back { opacity: 0 !important; z-index: 0; pointer-events: none; visibility: hidden; }
+    #previewPoster {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain; z-index: 2; display: none; background: #000; pointer-events: none;
+    }
+    #previewPoster.is-on { display: block; }
+    #previewPosterNote {
+      display: none; position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+      z-index: 3; margin: 0; padding: 4px 10px; border-radius: 999px;
+      background: rgba(0, 0, 0, 0.72); color: #e5e5e5; font-size: 12px; pointer-events: none;
+    }
+    #previewPosterNote.is-on { display: block; }
     #textOverlays {
       position: absolute; inset: 0; z-index: 3; pointer-events: none;
     }
@@ -74,6 +85,32 @@
       position: absolute; right: 6px; bottom: 6px; width: 28px; height: 28px;
       border: 0; border-radius: 999px; background: #22c55e; color: #052e16; cursor: pointer;
     }
+    .scene-trim {
+      position: relative; height: 36px; margin: 8px 8px 0;
+      background: #1c1c1c; border: 1px solid #3f3a2e; border-radius: 6px;
+    }
+    .scene-trim .clip-dim, .scene-trim .clip-sel {
+      position: absolute; top: 0; height: 100%; pointer-events: none;
+    }
+    .scene-trim .clip-dim { background: rgba(0, 0, 0, 0.55); z-index: 2; }
+    .scene-trim .clip-sel {
+      background: repeating-linear-gradient(90deg, #2a2418 0 8px, #332c1c 8px 16px);
+      z-index: 1;
+    }
+    .scene-trim .handle {
+      position: absolute; top: -3px; width: 14px; height: calc(100% + 6px);
+      background: #eab308; cursor: ew-resize; z-index: 4;
+      transform: translateX(-50%); display: none;
+    }
+    .scene-trim .handle::after {
+      content: ""; position: absolute; top: 50%; left: 50%;
+      width: 2px; height: 16px; background: #7a5d00;
+      transform: translate(-50%, -50%); border-radius: 1px;
+    }
+    .scene-card.scene-active .scene-trim .handle { display: block; }
+    .scene-trim .handle.left { border-radius: 4px 1px 1px 4px; }
+    .scene-trim .handle.right { border-radius: 1px 4px 4px 1px; }
+    .scene-trim-meta { font-size: 10px; color: #a3a3a3; padding: 2px 10px 0; }
     .scene-meta { padding: 8px 10px 10px; }
     .scene-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .scene-sub { font-size: 10px; color: #a3a3a3; margin-top: 2px; }
@@ -272,6 +309,8 @@
         <div id="previewStage">
           <video id="preview-video" class="preview-el is-front" playsinline muted></video>
           <video id="preview-video-b" class="preview-el is-back" playsinline muted></video>
+          <img id="previewPoster" alt="">
+          <p id="previewPosterNote">Preparando vista previa…</p>
           <div id="textOverlays"></div>
           <div id="emptyPreview" class="absolute inset-0 flex items-center justify-center text-neutral-600 text-sm">Clic un clip a la izquierda o pulsa +</div>
         </div>
@@ -280,7 +319,7 @@
           <span id="timecode" class="font-mono text-xs text-neutral-400">0:00 / 0:00</span>
           <input type="range" id="seekBar" min="0" max="1000" value="0" class="flex-1 accent-green-500">
           <input type="file" id="musicFile" class="hidden" accept=".mp3,.wav,.m4a,.aac,audio/mpeg,audio/wav,audio/mp4,audio/aac" onchange="pickSequenceMusic(this)">
-          <button type="button" class="tool" onclick="$('musicFile').click()">Canción</button>
+          <button type="button" class="tool" onclick="$('musicFile').click()">Música de fondo</button>
           <input type="range" id="musicVol" min="0" max="100" value="25" class="w-20 accent-green-500" oninput="setMusicVolume(this.value/100, false)" onchange="setMusicVolume(this.value/100, true)">
           <span id="musicVolLbl" class="text-[10px] text-neutral-400 w-8">25%</span>
           <span id="musicNameLbl" class="text-[10px] text-neutral-500 max-w-[140px] truncate"></span>
@@ -292,6 +331,18 @@
         <div class="flex items-center justify-between gap-3 mb-2">
           <span id="sceneToolsTitle" class="text-xs text-neutral-400">Escena</span>
           <select id="sceneClipSelect" class="scene-select max-w-[220px]" onchange="assignClip(selectedSceneIndex, this.value)"></select>
+        </div>
+        <div class="mb-3 border-b border-neutral-800 pb-2" id="sceneMicBox">
+          <button type="button" class="tool" id="sceneMicBtn" onclick="$('sceneMicFile').click()">Audio de micrófono</button>
+          <button type="button" class="tool" id="sceneMicServerBtn" onclick="useSceneMicUpload()">Usar recording.2026-10-01-102704.caf</button>
+          <p class="text-[10px] text-neutral-500 mt-1">Crea un clip nuevo en Library y lo pone en esta escena. El original no se toca. No es la música de fondo.</p>
+          <input id="sceneMicFile" type="file" accept=".caf,.wav,.mp3,.m4a,audio/*" class="text-xs mt-2 block">
+          <label class="block text-[10px] text-neutral-500 mt-2" for="sceneMicPath">Ruta en uploads</label>
+          <input id="sceneMicPath" type="text" placeholder="storage/uploads/recording.2026-10-01-102704.caf" class="w-full bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs mt-1" oninput="sceneMicFromServer=false">
+          <label class="block text-[10px] text-neutral-500 mt-2" for="sceneMicOffset">Desfase (ms)</label>
+          <input id="sceneMicOffset" type="number" step="1" inputmode="numeric" required placeholder="ej. -120" class="w-28 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs mt-1">
+          <button type="button" class="tool mt-2" onclick="saveSceneMic()">Guardar en esta escena</button>
+          <p id="sceneMicMsg" class="text-[10px] text-neutral-400 mt-1"></p>
         </div>
         <div class="flex flex-wrap gap-1.5">
           <button class="tool" onclick="sceneSplit()">Split</button>
@@ -313,6 +364,20 @@
           <input type="range" id="sceneDur" min="4" max="80" value="20" step="1" class="flex-1 accent-green-500" oninput="sceneSetDuration(this.value/10, false)" onchange="sceneSetDuration(this.value/10, true)">
           <span id="sceneDurLbl" class="text-[10px] w-10 text-neutral-400">2.0s</span>
         </div>
+        <div class="flex items-center gap-2 mt-2">
+          <span class="text-[10px] text-neutral-500">Foto fija</span>
+          <input type="number" id="stillHoldDur" min="0.4" max="120" step="0.1" value="4" class="w-16 bg-neutral-900 border border-neutral-700 rounded px-1 text-xs">
+          <button type="button" class="tool" onclick="sceneSetStillHold($('stillHoldDur').value)">Mantener</button>
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+          <span class="text-[10px] text-neutral-500">Ajuste</span>
+          <select id="sceneFit" class="scene-select" onchange="sceneSetFit(this.value)">
+            <option value="contain">Contain (barras negras)</option>
+            <option value="cover">Cover (rellenar)</option>
+          </select>
+          <button type="button" class="tool" onclick="applyFitToAll()">Aplicar a todas las escenas</button>
+        </div>
+        <a class="tool mt-2 inline-block" id="editThisClip" href="/editor" onclick="editThisClip(); return false;">Editar este clip</a>
         <div class="flex items-center gap-2 mt-2">
           <span class="text-[10px] text-neutral-500">VO</span>
           <input type="range" id="voRate" min="50" max="150" value="100" step="5" class="flex-1 accent-green-500" oninput="sceneSetVoRate(this.value/100, false)" onchange="sceneSetVoRate(this.value/100, true)">
@@ -536,8 +601,11 @@
     var playClockTime = 0;
     var playSceneIdx = -1;
     var sequenceRev = 0;
+    var trimSaveHint = "";
     var restoring = false;
     var saveTimer = null;
+    var saveInFlight = false;
+    var saveQueued = false;
     var dragFrom = null;
     var dragClip = null;
     var didDrag = false;
@@ -630,20 +698,28 @@
       if (n && previewProxy[n]) return previewProxy[n];
       return clipUrl(n);
     }
+    function proxyResolved(name) {
+      var n = fileName(name);
+      return !!(n && (previewProxy[n] || previewProxy[n] === ""));
+    }
     function kickProxy(name) {
       var n = fileName(name);
       if (!n || previewProxy[n] || previewProxy[n] === "" || proxyKick[n]) return;
       proxyKick[n] = true;
+      function ready(url) {
+        previewProxy[n] = url;
+        syncPreview(currentTime, isPlaying);
+      }
       fetch("/api/clips/proxy?name=" + encodeURIComponent(n))
         .then(function (r) { return r.json(); })
         .then(function (d) {
-          if (d && d.ready && d.url) { previewProxy[n] = d.url; return; }
-          if (d && d.skipped) { previewProxy[n] = ""; return; }
+          if (d && d.ready && d.url) { ready(d.url); return; }
+          if (d && d.skipped) { ready(""); return; }
           return fetch("/api/clips/proxy?name=" + encodeURIComponent(n), { method: "POST" })
             .then(function (r2) { return r2.json(); })
             .then(function (d2) {
-              if (d2 && d2.ready && d2.url) previewProxy[n] = d2.url;
-              else if (d2 && d2.skipped) previewProxy[n] = "";
+              if (d2 && d2.ready && d2.url) ready(d2.url);
+              else if (d2 && d2.skipped) ready("");
               else setTimeout(function () { proxyKick[n] = false; kickProxy(n); }, 8000);
             });
         })
@@ -670,7 +746,12 @@
         .then(function (b) {
           if (b && job.img && job.img.isConnected) {
             job.img.classList.remove("poster-miss");
-            job.img.src = URL.createObjectURL(b);
+            if (job.img.dataset.blob) {
+              try { URL.revokeObjectURL(job.img.dataset.blob); } catch (e) {}
+            }
+            var blobUrl = URL.createObjectURL(b);
+            job.img.dataset.blob = blobUrl;
+            job.img.src = blobUrl;
           }
         })
         .catch(function () {})
@@ -699,6 +780,15 @@
       var c = libBy(name);
       var d = c ? Number(c.duration) : 0;
       return d > 0 ? d : 0;
+    }
+    function isStillScene(s) {
+      if (!s) return false;
+      if (s.freeze) return true;
+      var name = String(s.clip || s.name || "");
+      return /^img_/i.test(name);
+    }
+    function sceneFit(s) {
+      return s && s.fit === "cover" ? "cover" : "contain";
     }
     function sceneDur(s) {
       if (!s) return 0.2;
@@ -996,8 +1086,18 @@
             '<span class="scene-dur">' + clock(sceneDur(s)) + '</span>' +
             '<button type="button" class="scene-play" data-i="' + i + '">▶</button>'
           : '<div class="text-neutral-500 text-xs p-6">Sin clip</div>';
+        var inn = (Number(s.inPoint) || 0).toFixed(1);
+        var out = (Number(s.outPoint) || 0).toFixed(1);
         return '<div class="scene-card card rounded-lg ' + activeCls + '" draggable="true" data-i="' + i + '">' +
           '<div class="scene-thumb">' + thumb + '</div>' +
+          '<div class="scene-trim" data-i="' + i + '">' +
+            '<div class="clip-dim head"></div>' +
+            '<div class="clip-sel"></div>' +
+            '<div class="clip-dim tail"></div>' +
+            '<div class="handle left" title="Inicio"></div>' +
+            '<div class="handle right" title="Final"></div>' +
+          '</div>' +
+          '<div class="scene-trim-meta">Inicio ' + inn + 's · Final ' + out + 's</div>' +
           '<div class="scene-meta"><div class="text-[10px] text-neutral-500">⋮⋮ Escena ' + (i + 1) + '</div>' +
           '<div class="scene-name">' + escapeHtml(pretty(s.clip)) + '</div>' +
           '<div class="scene-sub">' + clock(sceneDur(s)) + '</div></div></div>';
@@ -1006,6 +1106,15 @@
         '<button type="button" class="scene-add" id="addSceneBtn"><span class="text-3xl">+</span><span class="text-xs">Añadir escena</span></button>';
       box.querySelectorAll(".scene-thumb img[data-clip]").forEach(function (img) {
         bindPoster(img, img.getAttribute("data-clip"), img.getAttribute("data-t"));
+      });
+      box.querySelectorAll(".scene-trim").forEach(function (el) {
+        var i = Number(el.getAttribute("data-i"));
+        var s = (plan.scenes || [])[i];
+        layoutSceneTrim(el, s);
+        var left = el.querySelector(".handle.left");
+        var right = el.querySelector(".handle.right");
+        if (left) left.addEventListener("mousedown", function (e) { startSceneEdgeDrag("left", i, el, e); });
+        if (right) right.addEventListener("mousedown", function (e) { startSceneEdgeDrag("right", i, el, e); });
       });
       (plan.scenes || []).forEach(function (s) { if (s.clip) kickProxy(s.clip); });
       var n = (plan.scenes || []).length;
@@ -1083,6 +1192,14 @@
         if (full.value !== sc) full.value = sc;
       }
       syncSceneGradeSliders(s.grade);
+      var fitSel = $("sceneFit");
+      if (fitSel) fitSel.value = sceneFit(s);
+      var hold = $("stillHoldDur");
+      if (hold && document.activeElement !== hold) {
+        hold.value = String(isStillScene(s) ? sceneDur(s) : 4);
+      }
+      var edit = $("editThisClip");
+      if (edit) edit.href = "/editor?scene=" + (s.id ? encodeURIComponent(s.id) : "");
     }
 
     function syncSceneGradeSliders(g) {
@@ -1185,6 +1302,7 @@
       var video = el || previewLive();
       if (!video) return;
       video.style.filter = s ? gradeCss(s.grade) : "";
+      video.style.objectFit = sceneFit(s);
       var rot = s && s.rotation ? "rotate(" + s.rotation + "deg)" : "";
       video.style.transform = rot;
       if (video.classList.contains("is-back")) {
@@ -1277,11 +1395,53 @@
       return segs;
     }
 
+    function showStagePoster(name, t, fit) {
+      var img = $("previewPoster");
+      if (!img || !name) return;
+      var key = fileName(name) + "@" + (Math.round((Number(t) || 0) * 10) / 10);
+      img.style.objectFit = fit === "cover" ? "cover" : "contain";
+      img.classList.add("is-on");
+      var note = $("previewPosterNote");
+      if (note) note.classList.add("is-on");
+      if (img.dataset.key === key && img.getAttribute("src")) return;
+      img.dataset.key = key;
+      var url = posterUrl(name, t);
+      function paint(blob) {
+        if (!blob || img.dataset.key !== key) return;
+        if (img.dataset.blob) {
+          try { URL.revokeObjectURL(img.dataset.blob); } catch (e) {}
+        }
+        var blobUrl = URL.createObjectURL(blob);
+        img.dataset.blob = blobUrl;
+        img.src = blobUrl;
+        img.classList.add("is-on");
+      }
+      fetch(url).then(function (r) {
+        if (r.ok) return r.blob();
+        return fetch(url + (url.indexOf("?") >= 0 ? "&" : "?") + "make=1").then(function (r2) {
+          return r2.ok ? r2.blob() : null;
+        });
+      }).then(paint).catch(function () {});
+    }
+    function hideStagePoster() {
+      var img = $("previewPoster");
+      if (img) img.classList.remove("is-on");
+      var note = $("previewPosterNote");
+      if (note) note.classList.remove("is-on");
+    }
+    function applyPreviewMute(el, s) {
+      if (!el) return;
+      var silent = !!(s && s.muted);
+      el.muted = silent;
+      if (silent) el.setAttribute("muted", "");
+      else el.removeAttribute("muted");
+    }
     function syncPreview(t, play) {
       var s = sceneAt(t);
       var front = previewLive();
       if (!s || !front) return;
       if (!s.clip) {
+        hideStagePoster();
         previewPauseAll();
         return;
       }
@@ -1289,10 +1449,16 @@
         ? (Number(s.inPoint) || 0)
         : (Number(s.inPoint) || 0) + (t - (Number(s.timelineStart) || 0)) * (s.speed || 1);
       kickProxy(s.clip);
+      if (!proxyResolved(s.clip)) {
+        showStagePoster(s.clip, local, sceneFit(s));
+        previewPauseAll();
+        return;
+      }
+      hideStagePoster();
       var url = mediaPreviewUrl(s.clip);
       var rate = (s.speed || 1) * (assembleShuttle > 0 ? assembleShuttle : 1);
       function paintLive(el) {
-        el.muted = !!s.muted;
+        applyPreviewMute(el, s);
         el.playbackRate = rate;
         applyScenePreviewFx(s, el);
         if (s.freeze) {
@@ -1322,7 +1488,7 @@
       var back = previewHidden();
       var gen = ++previewSwapGen;
       back.dataset.clip = s.clip;
-      back.muted = !!s.muted;
+      applyPreviewMute(back, s);
       back.playbackRate = rate;
       applyScenePreviewFx(s, back);
       function reveal() {
@@ -1456,6 +1622,104 @@
       renderAll();
       syncPreview(currentTime, false);
     }
+    var sceneMicFromServer = false;
+    var sceneMicBusy = false;
+    var SCENE_MIC_SERVER = "storage/uploads/recording.2026-10-01-102704.caf";
+    function useSceneMicUpload() {
+      sceneMicFromServer = true;
+      var input = $("sceneMicFile");
+      if (input) input.value = "";
+      var path = $("sceneMicPath");
+      if (path) path.value = "";
+      var msg = $("sceneMicMsg");
+      if (msg) msg.textContent = "Se usará el audio del servidor. Escribe el desfase (ms).";
+    }
+    function readSceneMicOffset() {
+      var raw = String(($("sceneMicOffset") && $("sceneMicOffset").value) || "").trim();
+      if (!/^[+-]?\d+$/.test(raw)) return null;
+      return raw;
+    }
+    function sceneMicChosenPath() {
+      if (sceneMicFromServer) return SCENE_MIC_SERVER;
+      return String(($("sceneMicPath") && $("sceneMicPath").value) || "").trim();
+    }
+    async function saveSceneMic() {
+      var msg = $("sceneMicMsg");
+      var s = active();
+      if (!s) {
+        if (msg) msg.textContent = "Elige una escena.";
+        return;
+      }
+      if (sceneMicBusy) {
+        if (msg) msg.textContent = "Sigue creando el clip nuevo…";
+        return;
+      }
+      var clipId = fileName(s.clip || s.src || s.url || "");
+      if (!clipId) {
+        if (msg) msg.textContent = "Esta escena no tiene clip.";
+        return;
+      }
+      var offset = readSceneMicOffset();
+      if (offset === null) {
+        if (msg) msg.textContent = "Escribe el desfase en milisegundos antes de guardar.";
+        return;
+      }
+      var input = $("sceneMicFile");
+      var file = input && input.files && input.files[0];
+      var serverPath = file ? "" : sceneMicChosenPath();
+      if (!file && serverPath && !/\.(caf|wav|mp3|m4a)$/i.test(serverPath.split(/[\\/]/).pop() || "")) {
+        if (msg) msg.textContent = "Usa CAF, WAV, MP3 o M4A";
+        return;
+      }
+      if (!file && !serverPath) {
+        if (msg) msg.textContent = "Elige el audio de micrófono o una ruta en uploads.";
+        return;
+      }
+      var fd = new FormData();
+      fd.append("clip_id", clipId);
+      fd.append("offset_ms", offset);
+      if (file) fd.append("audio", file);
+      else fd.append("audio_path", serverPath);
+      sceneMicBusy = true;
+      var started = Date.now();
+      if (msg) msg.textContent = file
+        ? "Subiendo audio y creando clip nuevo…"
+        : "Creando clip nuevo en el servidor… puede tardar.";
+      var tick = setInterval(function () {
+        if (!msg) return;
+        var sec = Math.round((Date.now() - started) / 1000);
+        msg.textContent = (file ? "Subiendo y creando clip nuevo… " : "Creando clip nuevo en el servidor… ") + sec + "s";
+      }, 1000);
+      try {
+        var res = await fetch("/api/clips/replace-audio", { method: "POST", body: fd });
+        var data = await res.json().catch(function () { return {}; });
+        if (!res.ok) {
+          var detail = data && data.detail;
+          throw new Error(typeof detail === "string" ? detail : "No se pudo reemplazar el audio");
+        }
+        var name = data.filename || data.name;
+        if (!name) throw new Error("No se pudo reemplazar el audio");
+        s.clip = name;
+        s.name = name;
+        s.src = data.url || ("/clips/" + encodeURIComponent(name));
+        s.url = s.src;
+        delete previewProxy[name];
+        delete proxyKick[name];
+        s.muted = false;
+        if (typeof library !== "undefined" && library && !library.some(function (c) { return c.name === name; })) {
+          library.push({ name: name, title: data.title || name, duration: data.duration || 0, url: s.src });
+        }
+        if (msg) msg.textContent = "Clip nuevo en esta escena: " + name + ". Se oye el micrófono.";
+        renderAll();
+        lockSave();
+        syncPreview(currentTime, false);
+      } catch (e) {
+        if (msg) msg.textContent = e.message;
+      } finally {
+        clearInterval(tick);
+        sceneMicBusy = false;
+      }
+    }
 
     function sceneSplit() {
       var s = active();
@@ -1476,6 +1740,74 @@
       syncPreview(currentTime, false);
     }
 
+    function layoutSceneTrim(el, s) {
+      if (!el || !s) return;
+      var max = Math.max(0.2, sceneSourceMax(s));
+      var px = (el.clientWidth || 160) / max;
+      var inX = Math.max(0, (Number(s.inPoint) || 0) * px);
+      var outX = Math.max(inX + 2, (Number(s.outPoint) || 0) * px);
+      var srcPx = max * px;
+      var head = el.querySelector(".clip-dim.head");
+      var sel = el.querySelector(".clip-sel");
+      var tail = el.querySelector(".clip-dim.tail");
+      if (head) { head.style.left = "0px"; head.style.width = inX + "px"; }
+      if (sel) { sel.style.left = inX + "px"; sel.style.width = Math.max(2, outX - inX) + "px"; }
+      if (tail) { tail.style.left = outX + "px"; tail.style.width = Math.max(0, srcPx - outX) + "px"; }
+      var left = el.querySelector(".handle.left");
+      var right = el.querySelector(".handle.right");
+      if (left) left.style.left = ((Number(s.inPoint) || 0) * px) + "px";
+      if (right) right.style.left = ((Number(s.outPoint) || 0) * px) + "px";
+    }
+    function startSceneEdgeDrag(side, index, el, e) {
+      e.preventDefault();
+      e.stopPropagation();
+      didDrag = true;
+      var s = (plan.scenes || [])[index];
+      if (!s) return;
+      selectedSceneIndex = index;
+      markSelectedScene(index);
+      var startX = e.clientX;
+      var origIn = Number(s.inPoint) || 0;
+      var origOut = Number(s.outPoint) || (origIn + 0.2);
+      var origDur = Number(s.duration) || sceneDur(s);
+      var maxOut = sceneSourceMax(s);
+      var px = (el.clientWidth || 160) / Math.max(0.2, maxOut);
+      function onMove(ev) {
+        var dt = (ev.clientX - startX) / px;
+        if (s.freeze) {
+          if (side === "right") s.duration = Math.max(0.2, origDur + dt);
+          else s.duration = Math.max(0.2, origDur - dt);
+        } else if (side === "left") {
+          s.inPoint = Math.max(0, Math.min(origIn + dt, origOut - 0.2));
+        } else {
+          s.outPoint = Math.max(origIn + 0.2, Math.min(maxOut, origOut + dt));
+        }
+        layoutSceneTrim(el, s);
+        var card = el.closest(".scene-card");
+        var meta = card && card.querySelector(".scene-trim-meta");
+        if (meta) meta.textContent = "Inicio " + (Number(s.inPoint) || 0).toFixed(1) + "s · Final " + (Number(s.outPoint) || 0).toFixed(1) + "s";
+        currentTime = side === "left" ? (s.timelineStart || 0) : (s.timelineStart || 0) + sceneDur(s) - 0.04;
+        syncPreview(currentTime, false);
+        updateHud();
+      }
+      function onUp() {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        if (!s.freeze) {
+          s.inPoint = Math.round((Number(s.inPoint) || 0) * 100) / 100;
+          s.outPoint = Math.round((Number(s.outPoint) || 0) * 100) / 100;
+        }
+        trimSaveHint = side === "left"
+          ? "Inicio recortado."
+          : "Final recortado. Si el tirador no avanza, no queda más video en ese lado.";
+        rebuild();
+        renderAll();
+        var hint = $("saveState");
+        if (hint) hint.textContent = trimSaveHint;
+      }
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    }
     function sceneTrim(side) {
       var s = active();
       if (!s) return;
@@ -2696,6 +3028,35 @@
       rebuild(true);
       renderAll();
     }
+    function sceneSetStillHold(sec) {
+      var s = active();
+      if (!s) return;
+      var d = Math.max(0.4, Math.min(120, Number(sec) || 0.4));
+      s.freeze = true;
+      s.duration = Math.round(d * 100) / 100;
+      rebuild(true);
+      syncPreview(currentTime, isPlaying);
+      lockSave();
+    }
+    function sceneSetFit(v) {
+      var s = active();
+      if (!s) return;
+      s.fit = v === "cover" ? "cover" : "contain";
+      applyScenePreviewFx(s);
+      lockSave();
+    }
+    function editThisClip() {
+      var s = active();
+      if (!s) return;
+      var id = s.id ? encodeURIComponent(s.id) : "";
+      location.href = "/editor?scene=" + id;
+    }
+    function applyFitToAll() {
+      var sel = $("sceneFit");
+      var fit = sel && sel.value === "cover" ? "cover" : "contain";
+      (plan.scenes || []).forEach(function (s) { s.fit = fit; });
+      rebuild();
+    }
     function sceneSetDuration(playSec, commit) {
       var s = flushNarration() || active();
       if (!s) return;
@@ -3158,6 +3519,7 @@
         playScene(Number(card.getAttribute("data-i")), false);
       });
       $("sceneList").addEventListener("dragstart", function (ev) {
+        if (ev.target.closest(".scene-trim")) { ev.preventDefault(); return; }
         var card = ev.target.closest(".scene-card");
         if (!card) return;
         dragFrom = Number(card.getAttribute("data-i"));
@@ -3327,6 +3689,7 @@
 
     function saveNow() {
       if (restoring) return false;
+      if (saveInFlight) { saveQueued = true; return true; }
       flushDocument();
       var payload = {
         savedAt: Date.now(),
@@ -3354,29 +3717,60 @@
       var stamp = new Date(payload.savedAt);
       var el = $("saveState");
       if (el) el.textContent = "Guardando…";
+      saveInFlight = true;
+      function noteSaved(r, d) {
+        if (d && d.sequence && d.sequence.rev != null) sequenceRev = Number(d.sequence.rev) || sequenceRev;
+        else if (d && d.rev != null) sequenceRev = Number(d.rev) || sequenceRev;
+        if (d && d.stale && d.sequence) {
+          trimSaveHint = "";
+          if (el) el.textContent = "Disco mas nuevo · recargado";
+          restoring = true;
+          return Promise.resolve(restore(sequenceToAssemble(d.sequence))).then(function () {
+            restoring = false;
+          });
+        }
+        if (d && d.shrink && !payload.force) {
+          var fromN = d.from;
+          var toN = d.to;
+          if (!window.confirm("Vas a pasar de " + fromN + " a " + toN + " escenas. ¿Guardar de todas formas?")) {
+            if (el) el.textContent = "Sin cambios";
+            return;
+          }
+          payload.force = true;
+          return fetch("/api/sequence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          }).then(function (r2) {
+            return r2.json().catch(function () { return {}; }).then(function (d2) {
+              return noteSaved(r2, d2);
+            });
+          });
+        }
+        if (!r.ok || d.ok === false) {
+          trimSaveHint = "";
+          if (el) el.textContent = "No se pudo guardar: " + apiError(d, "HTTP " + r.status);
+          return;
+        }
+        if (el) el.textContent = trimSaveHint || ("Guardado " + stamp.toLocaleTimeString());
+        if (!saveQueued) trimSaveHint = "";
+      }
       fetch("/api/sequence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       }).then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (d) {
-          if (d && d.sequence && d.sequence.rev != null) sequenceRev = Number(d.sequence.rev) || sequenceRev;
-          else if (d && d.rev != null) sequenceRev = Number(d.rev) || sequenceRev;
-          if (d && d.stale && d.sequence) {
-            if (el) el.textContent = "Disco mas nuevo · recargado";
-            restoring = true;
-            return Promise.resolve(restore(sequenceToAssemble(d.sequence))).then(function () {
-              restoring = false;
-            });
-          }
-          if (!r.ok || d.ok === false) {
-            if (el) el.textContent = "No se pudo guardar: " + apiError(d, "HTTP " + r.status);
-            return;
-          }
-          if (el) el.textContent = "Guardado " + stamp.toLocaleTimeString();
+          return noteSaved(r, d);
         });
       }).catch(function () {
         if (el) el.textContent = "No se pudo guardar";
+      }).then(function () {
+        saveInFlight = false;
+        if (saveQueued) {
+          saveQueued = false;
+          saveNow();
+        }
       });
       return true;
     }
@@ -3497,6 +3891,7 @@
       if (vsEl && document.activeElement !== vsEl) vsEl.value = plan.script;
       plan.scenes = (plan.scenes || []).map(function (s, i) {
         var n = makeScene(s.clip, i);
+        if (s.id) n.id = s.id;
         n.url = s.src || s.url || n.url;
         n.inPoint = Number(s.inPoint) || 0;
         n.outPoint = Number(s.outPoint) || n.outPoint;

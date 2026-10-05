@@ -137,6 +137,31 @@
       </div>
     </div>
 
+    <section class="card rounded-xl p-6 mb-8">
+      <h2 class="text-lg font-semibold">Audio de micrófono</h2>
+      <p class="text-sm text-neutral-400 mt-1 mb-4">
+        Sustituye el audio de cámara por una toma de Ocenaudio (CAF, WAV, MP3 o M4A).
+        El original no se toca. El montaje no cambia hasta que coloques el clip nuevo.
+      </p>
+      <label class="block text-sm text-neutral-300 mb-1" for="micClip">Clip de Library</label>
+      <select id="micClip" class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 mb-3 text-sm"></select>
+      <label class="block text-sm text-neutral-300 mb-1" for="micFile">Archivo de audio</label>
+      <input id="micFile" type="file" accept=".caf,.wav,.mp3,.m4a,audio/*" class="text-sm mb-3 block">
+      <label class="block text-sm text-neutral-300 mb-1" for="micOffset">Desfase (ms)</label>
+      <input id="micOffset" type="number" step="1" inputmode="numeric" placeholder="ej. -120" required
+        class="w-40 bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm mb-3">
+      <label class="block text-sm text-neutral-300 mb-1" for="micLabel">Nombre del clip nuevo (opcional)</label>
+      <input id="micLabel" type="text" maxlength="80" placeholder="entrevista_mic"
+        class="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-sm mb-4">
+      <div class="flex flex-wrap gap-2">
+        <button type="button" onclick="previewMicAudio()" class="bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 px-4 py-2 rounded-lg text-sm">Probar</button>
+        <button type="button" onclick="saveMicAudio()" class="accent text-black font-semibold px-4 py-2 rounded-lg text-sm">Guardar clip nuevo</button>
+      </div>
+      <p id="micMsg" class="text-sm text-neutral-400 mt-3"></p>
+      <video id="micPreview" class="hidden w-full max-h-64 mt-3 bg-black rounded-lg" controls playsinline></video>
+      <div id="libraryClips" class="mt-4"></div>
+    </section>
+
     <!-- Results -->
     <section id="results" class="space-y-6"></section>
 
@@ -501,6 +526,89 @@
         openVideoUrl();
       }
     });
+
+    function escapeHtml(s) {
+      return String(s || "").replace(/[&<>"']/g, function (ch) {
+        return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch];
+      });
+    }
+    function readMicOffset() {
+      const raw = String(document.getElementById("micOffset").value || "").trim();
+      if (!/^[+-]?\d+$/.test(raw)) return null;
+      return raw;
+    }
+    async function loadLibraryClips() {
+      const sel = document.getElementById("micClip");
+      const list = document.getElementById("libraryClips");
+      try {
+        const res = await fetch("/api/clips");
+        const data = await res.json();
+        const clips = data.clips || [];
+        sel.innerHTML = clips.map(function (c) {
+          return '<option value="' + escapeHtml(c.name) + '">' + escapeHtml(c.title || c.name) + '</option>';
+        }).join("");
+        if (!clips.length) {
+          list.innerHTML = '<p class="text-sm text-neutral-500">No hay clips de video en Library.</p>';
+          return;
+        }
+        list.innerHTML = clips.map(function (c) {
+          const href = "/editor?clip=" + encodeURIComponent(c.name);
+          return '<div class="flex justify-between gap-3 text-sm py-1.5 border-b border-neutral-800">' +
+            '<span>' + escapeHtml(c.name) + '</span>' +
+            '<a class="text-green-400" href="' + href + '">Editar</a></div>';
+        }).join("");
+      } catch (e) {
+        list.textContent = "No se pudo leer Library.";
+      }
+    }
+    async function sendMicAudio(preview) {
+      const msg = document.getElementById("micMsg");
+      const clipId = document.getElementById("micClip").value;
+      if (!clipId) {
+        msg.textContent = "Elige un clip de video.";
+        return;
+      }
+      const file = document.getElementById("micFile").files[0];
+      if (!file) {
+        msg.textContent = "Elige el audio de micrófono.";
+        return;
+      }
+      const offset = readMicOffset();
+      if (offset === null) {
+        msg.textContent = "Escribe el desfase en milisegundos antes de guardar.";
+        return;
+      }
+      const fd = new FormData();
+      fd.append("clip_id", clipId);
+      fd.append("offset_ms", offset);
+      fd.append("audio", file);
+      const label = document.getElementById("micLabel").value.trim();
+      if (label) fd.append("label", label);
+      msg.textContent = preview ? "Probando desfase…" : "Guardando clip nuevo…";
+      try {
+        const res = preview
+          ? await fetch("/api/clips/replace-audio/preview", { method: "POST", body: fd })
+          : await fetch("/api/clips/replace-audio", { method: "POST", body: fd });
+        const data = await res.json().catch(function () { return {}; });
+        if (!res.ok) throw new Error(data.detail || "No se pudo reemplazar el audio");
+        if (preview) {
+          const player = document.getElementById("micPreview");
+          player.src = data.url;
+          player.classList.remove("hidden");
+          player.play().catch(function () {});
+          msg.textContent = "Preview lista. Desfase " + data.offset_ms + " ms. El clip de Library no cambió.";
+          return;
+        }
+        msg.textContent = "Clip nuevo: " + (data.filename || "");
+        document.getElementById("micPreview").classList.add("hidden");
+        await loadLibraryClips();
+      } catch (e) {
+        msg.textContent = e.message;
+      }
+    }
+    function previewMicAudio() { return sendMicAudio(true); }
+    function saveMicAudio() { return sendMicAudio(false); }
+    loadLibraryClips();
   </script>
 </body>
 </html>

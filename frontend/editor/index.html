@@ -807,6 +807,17 @@
           <button class="chip" id="muteChip" onclick="toggleMute()">Silenciar</button>
           <button class="chip" id="fadeInChip" onclick="toggleFade('fadeIn')">Fade in</button>
           <button class="chip" id="fadeOutChip" onclick="toggleFade('fadeOut')">Fade out</button>
+          <div style="flex:1 1 100%; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+            <span class="insp-label">Audio de micrófono</span>
+            <input type="file" id="micFile" accept=".caf,.wav,.mp3,.m4a,audio/*" class="text-xs">
+            <label class="insp-label" for="micOffset">Desfase (ms)</label>
+            <input type="number" id="micOffset" step="1" inputmode="numeric" placeholder="0" required style="width:88px">
+            <input type="text" id="micLabel" maxlength="80" placeholder="Nombre (opcional)" style="width:140px">
+            <button type="button" class="chip" onclick="previewMicAudio()">Probar</button>
+            <button type="button" class="chip" onclick="saveMicAudio()">Guardar clip nuevo</button>
+            <span id="micMsg" class="insp-label"></span>
+            <video id="micPreview" class="hidden" style="flex:1 1 100%; max-height:120px; background:#000" controls playsinline></video>
+          </div>
         </div>
 
         <div id="pane-filters" class="insp-pane">
@@ -3646,6 +3657,63 @@
         setHint("Error: " + e.message);
       }
     }
+    function readMicOffset() {
+      const raw = String((document.getElementById("micOffset") || {}).value || "").trim();
+      if (!/^[+-]?\d+$/.test(raw)) return null;
+      return raw;
+    }
+    async function sendMicAudio(preview) {
+      const clip = project.clip;
+      const msg = document.getElementById("micMsg");
+      if (!clip) return setHint("No hay clip.");
+      const name = clipFileName(clip);
+      const src = persistableSrc(clip) || clip.src || "";
+      if (!name || !isServerSrc(src)) {
+        if (msg) msg.textContent = "El clip tiene que estar en Library.";
+        return setHint("El clip tiene que estar en Library.");
+      }
+      const file = (document.getElementById("micFile") || {}).files;
+      if (!file || !file[0]) {
+        if (msg) msg.textContent = "Elige el audio de micrófono.";
+        return;
+      }
+      const offset = readMicOffset();
+      if (offset === null) {
+        const note = "Escribe el desfase en milisegundos antes de guardar.";
+        if (msg) msg.textContent = note;
+        return setHint(note);
+      }
+      const fd = new FormData();
+      fd.append("clip_id", name);
+      fd.append("offset_ms", offset);
+      fd.append("audio", file[0]);
+      const label = String((document.getElementById("micLabel") || {}).value || "").trim();
+      if (label) fd.append("label", label);
+      if (msg) msg.textContent = preview ? "Probando…" : "Guardando…";
+      try {
+        const res = preview
+          ? await fetch("/api/clips/replace-audio/preview", { method: "POST", body: fd })
+          : await fetch("/api/clips/replace-audio", { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "No se pudo reemplazar el audio");
+        if (preview) {
+          const player = document.getElementById("micPreview");
+          if (player) {
+            player.src = data.url;
+            player.classList.remove("hidden");
+          }
+          if (msg) msg.textContent = "Preview " + (data.offset_ms) + " ms";
+          return;
+        }
+        if (msg) msg.textContent = "Clip nuevo: " + (data.filename || "");
+        setHint("Guardado en Library: " + (data.filename || "") + ". El montaje no cambió.");
+      } catch (e) {
+        if (msg) msg.textContent = e.message;
+        setHint("Error: " + e.message);
+      }
+    }
+    function previewMicAudio() { return sendMicAudio(true); }
+    function saveMicAudio() { return sendMicAudio(false); }
     async function publishToLibrary() {
       const clip = project.clip;
       if (!clip) return alert("No hay clip");

@@ -23,10 +23,14 @@ CLIPS_DIR = STORAGE_DIR / "clips"
 TEMP_DIR = STORAGE_DIR / "temp"
 UPLOADS_DIR = STORAGE_DIR / "uploads"
 PROXIES_DIR = STORAGE_DIR / "proxies"
+EXPORTS_TMP = STORAGE_DIR / "exports" / "tmp"
 CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 PROXIES_DIR.mkdir(parents=True, exist_ok=True)
+EXPORTS_TMP.mkdir(parents=True, exist_ok=True)
+
+MIC_AUDIO_EXT = {".caf", ".wav", ".mp3", ".m4a"}
 
 CREATE_NO_WINDOW = 0x08000000
 
@@ -205,7 +209,7 @@ def still_from_image(
         return False, "FFmpeg no está disponible", None
     if not src.exists() or src.stat().st_size < 80:
         return False, f"No se encuentra la imagen {src.name if src else ''}", None
-    seconds = max(1.0, min(12.0, float(seconds or 4)))
+    seconds = max(1.0, min(30.0, float(seconds or 4)))
     stem = safe_filename(stem or f"img_{src.stem}")[:50]
     if not stem.lower().startswith("img_"):
         stem = "img_" + stem
@@ -519,6 +523,94 @@ def publish_edited_clip(
     return True, f"Listo para Video Creation: {dest.name}", dest
 
 
+def replace_clip_audio(
+    video: Path,
+    audio: Path,
+    offset_ms: int,
+    output_name: str = "",
+    dest_dir: Optional[Path] = None,
+) -> Tuple[bool, str, Optional[Path]]:
+    """Copy the picture. Replace camera audio with an external mic track.
+
+    offset_ms is applied as ffmpeg -itsoffset (seconds = ms/1000). Positive delays
+    the mic; negative starts it earlier. Output duration matches the video.
+    video and audio are only read. The new file is a different path.
+    """
+    if not check_ffmpeg():
+        return False, "FFmpeg no está disponible", None
+    video = Path(video)
+    audio = Path(audio)
+    if not video.is_file():
+        return False, f"No se encuentra {video.name}", None
+    if not audio.is_file() or audio.stat().st_size < 32:
+        return False, "El audio de micrófono está vacío", None
+    if audio.suffix.lower() not in MIC_AUDIO_EXT:
+        return False, "Usa CAF, WAV, MP3 o M4A", None
+    try:
+        offset_ms = int(offset_ms)
+    except (TypeError, ValueError):
+        return False, "Desfase (ms) tiene que ser un entero", None
+    duration = probe_duration(video)
+    if not duration or duration < 0.05:
+        return False, "No pude leer la duración del video", None
+    info = get_video_info(video)
+    streams = info.get("streams") or []
+    if not any(s.get("codec_type") == "video" for s in streams):
+        return False, "El clip no tiene video", None
+    ainfo = get_video_info(audio)
+    if not any(s.get("codec_type") == "audio" for s in (ainfo.get("streams") or [])):
+        return False, "El archivo no tiene audio", None
+
+    folder = Path(dest_dir) if dest_dir is not None else CLIPS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    stem = safe_filename(output_name or f"{video.stem}_mic")
+    dest = unique_path(folder, stem, ".mp4")
+    try:
+        if dest.resolve() == video.resolve() or dest.resolve() == audio.resolve():
+            dest = unique_path(folder, stem + "_mic", ".mp4")
+    except OSError:
+        pass
+
+    offset_sec = f"{offset_ms / 1000.0:.6f}"
+    dur = f"{duration:.6f}"
+    ff = ffmpeg_bin()
+    cmd = [
+        ff, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+        "-i", str(video),
+        "-itsoffset", offset_sec,
+        "-i", str(audio),
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "copy",
+        "-af", f"aresample=async=1:first_pts=0,apad=whole_dur={dur},atrim=0:{dur}",
+        "-c:a", "aac", "-b:a", "160k",
+        "-sn", "-dn",
+        "-t", dur,
+        "-movflags", "+faststart",
+        str(dest),
+    ]
+    result = _run(cmd)
+    if result.returncode != 0 or not dest.is_file() or dest.stat().st_size < 500:
+        dest.unlink(missing_ok=True)
+        err = (result.stderr or "Error FFmpeg")[-400:]
+        return False, err or "No se pudo reemplazar el audio", None
+    out_info = get_video_info(dest)
+    out_streams = out_info.get("streams") or []
+    n_video = sum(1 for s in out_streams if s.get("codec_type") == "video")
+    n_audio = sum(1 for s in out_streams if s.get("codec_type") == "audio")
+    out_dur = probe_duration(dest) or 0.0
+    if n_video != 1 or n_audio != 1 or abs(out_dur - duration) > 0.35:
+        dest.unlink(missing_ok=True)
+        return False, "El clip nuevo no coincide con la duración del video", None
+    try:
+        if dest.resolve() == video.resolve():
+            dest.unlink(missing_ok=True)
+            return False, "No se puede sobrescribir el original", None
+    except OSError:
+        pass
+    return True, dest.name, dest
+
+
 def remove_soft_subtitles(input_path: Path, output_path: Optional[Path] = None) -> Tuple[bool, str]:
     """
     Elimina solo subtítulos suaves (pistas) de un video ya descargado.
@@ -590,7 +682,7 @@ def strip_captions(
     return True, f"Subtítulos de pista quitados: {final.name}", final
 
 
-def get_video_info(path: Path) -> dict:
+def get_video_info(path: Path, timeout: float = 8) -> dict:
     """Obtiene duración y streams con ffprobe."""
     probe = ffprobe_bin()
     if not probe or not path.exists():
@@ -603,7 +695,7 @@ def get_video_info(path: Path) -> dict:
     ]
     try:
         kwargs = _win_kwargs()
-        kwargs["timeout"] = 8
+        kwargs["timeout"] = timeout
         result = subprocess.run(cmd, **kwargs)
         if result.returncode != 0 or not result.stdout.strip():
             return {}
@@ -612,8 +704,8 @@ def get_video_info(path: Path) -> dict:
         return {}
 
 
-def probe_duration(path: Path) -> Optional[float]:
-    info = get_video_info(path)
+def probe_duration(path: Path, timeout: float = 8) -> Optional[float]:
+    info = get_video_info(path, timeout=timeout)
     try:
         dur = float(info.get("format", {}).get("duration") or 0)
         return dur if dur > 0 else None
@@ -792,6 +884,8 @@ def delete_peaks_sidecar(path: Path) -> None:
 POSTER_WIDTH = 320
 PROXY_MIN_BYTES = 15 * 1024 * 1024
 PROXY_HEIGHT = 540
+# A killed 180s encode of a 45 min source is minutes short, not 3s short.
+PROXY_DURATION_SLACK = 3.0
 _proxy_gen_lock = threading.Lock()
 
 
@@ -911,13 +1005,115 @@ def proxy_needed(path: Path) -> bool:
         return False
 
 
-def proxy_is_fresh(src: Path, dest: Path) -> bool:
+def _proxy_duration_cache(src: Path) -> Path:
+    return PROXIES_DIR / (Path(src).name + ".duration.json")
+
+
+def _av_from_info(info: dict) -> Tuple[Optional[float], Optional[bool]]:
+    if not info:
+        return None, None
     try:
-        return (
+        dur = float((info.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    audio = any(s.get("codec_type") == "audio" for s in (info.get("streams") or []))
+    return (dur if dur > 0 else None), audio
+
+
+def cached_source_av(src: Path) -> Tuple[Optional[float], Optional[bool]]:
+    """Duration and whether the source has audio. Probed once for a large HEVC."""
+    src = Path(src)
+    cache = _proxy_duration_cache(src)
+    cached_dur = None
+    try:
+        if cache.is_file() and cache.stat().st_mtime >= src.stat().st_mtime:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            cached_dur = float(data.get("duration") or 0) or None
+            if cached_dur and "audio" in data:
+                return cached_dur, bool(data["audio"])
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        cached_dur = None
+    info = get_video_info(src, timeout=300)
+    dur, audio = _av_from_info(info)
+    if not dur:
+        dur = cached_dur or probe_duration(src, timeout=300)
+    if not dur:
+        return None, None
+    payload = {"duration": dur}
+    if info:
+        payload["audio"] = bool(audio)
+    try:
+        PROXIES_DIR.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        pass
+    return dur, (bool(audio) if info else None)
+
+
+def cached_source_duration(src: Path) -> Optional[float]:
+    """Source duration, remembered beside the proxy so a 6 GB HEVC is probed once."""
+    dur, _audio = cached_source_av(src)
+    return dur
+
+
+def file_has_audio(path: Path, timeout: float = 20) -> Optional[bool]:
+    """True/False when ffprobe reads the file. None when the probe fails."""
+    info = get_video_info(path, timeout=timeout)
+    if not info:
+        return None
+    return any(s.get("codec_type") == "audio" for s in (info.get("streams") or []))
+
+
+def proxy_audio_ok(src: Path, dest: Path) -> bool:
+    """A clip with audio needs a proxy that still has an audio stream. Silent -an is not ready."""
+    _dur, src_audio = cached_source_av(src)
+    if src_audio is not True:
+        return True
+    return file_has_audio(dest) is True
+
+
+def proxy_covers_source(src: Path, dest: Path) -> bool:
+    """True when dest is a finished proxy: its duration matches the source."""
+    src_d = cached_source_duration(src)
+    dst_d = probe_duration(dest, timeout=20)
+    if not src_d or not dst_d:
+        return False
+    return abs(dst_d - src_d) <= PROXY_DURATION_SLACK
+
+
+def proxy_is_fresh(src: Path, dest: Path) -> bool:
+    """Ready only when the proxy file is newer than the source and covers its duration."""
+    try:
+        if not (
             dest.is_file()
             and dest.stat().st_size > 2000
             and dest.stat().st_mtime >= src.stat().st_mtime
-        )
+        ):
+            return False
+    except OSError:
+        return False
+    return proxy_covers_source(src, dest) and proxy_audio_ok(src, dest)
+
+
+def drop_incomplete_proxy(src: Path, dest: Path) -> bool:
+    """Delete a proxy that is on disk but does not cover the source. Leave the source."""
+    src, dest = Path(src), Path(dest)
+    try:
+        if not dest.is_file() or dest.stat().st_size <= 2000:
+            return False
+        if dest.resolve() == src.resolve():
+            return False
+        if dest.stat().st_mtime < src.stat().st_mtime:
+            return False
+    except OSError:
+        return False
+    if not cached_source_duration(src):
+        return False
+    if proxy_covers_source(src, dest) and proxy_audio_ok(src, dest):
+        return False
+    try:
+        dest.unlink()
+        return True
     except OSError:
         return False
 
@@ -933,6 +1129,7 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
     dest = proxy_path(path.name)
     if proxy_is_fresh(path, dest):
         return "ready", dest
+    drop_incomplete_proxy(path, dest)
     if not check_ffmpeg():
         return "failed", None
     ff = ffmpeg_bin()
@@ -941,32 +1138,52 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
     with _proxy_gen_lock:
         if proxy_is_fresh(path, dest):
             return "ready", dest
+        drop_incomplete_proxy(path, dest)
         tmp = dest.with_name(dest.name + ".tmp.mp4")
+        _src_dur, src_audio = cached_source_av(path)
         tries = [
             [
-                ff, "-y", "-i", str(path),
+                ff, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-i", str(path),
                 "-vf", f"scale=-2:{PROXY_HEIGHT}",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
                 "-c:a", "aac", "-b:a", "96k",
                 "-movflags", "+faststart",
                 str(tmp),
             ],
-            [
-                ff, "-y", "-i", str(path),
+        ]
+        # -an is only for a clip that has no audio. A mic take must keep its track.
+        if src_audio is False:
+            tries.append([
+                ff, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
+                "-i", str(path),
                 "-vf", "scale=-2:480",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
                 "-an",
                 "-movflags", "+faststart",
                 str(tmp),
-            ],
-        ]
+            ])
+        def _drop_tmp() -> None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
         try:
             for cmd in tries:
                 try:
-                    r = subprocess.run(cmd, timeout=180, **_win_kwargs())
-                except Exception:
+                    # No short fuse: a ~45 min HEVC proxy can run well past 180s.
+                    r = subprocess.run(cmd, **_win_kwargs())
+                except (OSError, subprocess.SubprocessError):
+                    _drop_tmp()
                     continue
-                if tmp.is_file() and tmp.stat().st_size > 2000:
+                if (
+                    r.returncode == 0
+                    and tmp.is_file()
+                    and tmp.stat().st_size > 2000
+                    and proxy_covers_source(path, tmp)
+                    and proxy_audio_ok(path, tmp)
+                ):
                     try:
                         if dest.exists():
                             dest.unlink()
@@ -975,14 +1192,15 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                         try:
                             shutil.copyfile(tmp, dest)
                         except Exception:
+                            _drop_tmp()
                             return "failed", None
-                    return ("ready", dest) if dest.is_file() else ("failed", None)
+                    if dest.is_file() and proxy_covers_source(path, dest) and proxy_audio_ok(path, dest):
+                        return "ready", dest
+                    return "failed", None
+                _drop_tmp()
             return "failed", None
         finally:
-            try:
-                tmp.unlink(missing_ok=True)
-            except Exception:
-                pass
+            _drop_tmp()
 
 
 def move_clip_proxy(src: Path, dest: Path) -> None:
@@ -1348,11 +1566,19 @@ def _normalize_segment(
     grade = _grade_filter(extras.get("grade") if isinstance(extras.get("grade"), dict) else None)
     if grade:
         vf_parts.append(grade)
-    vf_parts.append(
-        f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
-        "setsar=1,fps=30,format=yuv420p"
-    )
+    fit = str(extras.get("fit") or "contain").strip().lower()
+    if fit == "cover":
+        vf_parts.append(
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},"
+            "setsar=1,fps=30,format=yuv420p"
+        )
+    else:
+        vf_parts.append(
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+            "setsar=1,fps=30,format=yuv420p"
+        )
     if freeze:
         vf_parts.append(f"tpad=stop_mode=clone:stop_duration={out_dur:.4f}")
     elif abs(speed - 1.0) > 0.01:
@@ -1396,8 +1622,9 @@ def _normalize_segment(
         cmd = [
             ff, "-y",
             "-ss", f"{in_point:.4f}",
-            "-i", str(src),
             "-t", f"{src_t:.4f}",
+            "-i", str(src),
+            "-t", f"{out_dur:.4f}",
             "-vf", vf,
         ]
         if af:
@@ -1414,9 +1641,11 @@ def _normalize_segment(
         cmd = [
             ff, "-y",
             "-ss", f"{in_point:.4f}",
-            "-i", str(src),
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-t", f"{src_t:.4f}",
+            "-i", str(src),
+            "-f", "lavfi", "-t", f"{out_dur:.4f}",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-t", f"{out_dur:.4f}",
             "-vf", vf,
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
             "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
@@ -1606,6 +1835,57 @@ def _concat_segments(segments: List[Path], dest: Path, job_dir: Path) -> Tuple[b
     return True, "ok"
 
 
+def _export_vo_signature(script: str, lead: Optional[Dict[str, Any]] = None) -> str:
+    lead = lead or {}
+    rate = lead.get("voRate")
+    parts = [
+        "full",
+        str(script or ""),
+        str(lead.get("voiceStyle") or ""),
+        str(lead.get("voiceName") or ""),
+        str(lead.get("voiceEngine") or ""),
+        str(lead.get("voFx") or ""),
+        "" if rate is None else str(rate),
+    ]
+    return "\x1f".join(parts)[:8000]
+
+
+def _export_vo_lead(clips: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    for clip in clips or []:
+        if not isinstance(clip, dict):
+            continue
+        if clip.get("voiceover") and str(clip.get("narration") or "").strip():
+            return clip
+    return None
+
+
+def _maybe_use_stored_vo(script: str, lead: Optional[Dict[str, Any]], dest: Path) -> bool:
+    """Copy storage/autosave/vo.mp3 when its sequence signature still matches."""
+    folder = STORAGE_DIR / "autosave"
+    vo = folder / "vo.mp3"
+    seq_path = folder / "sequence.json"
+    try:
+        if not vo.is_file() or vo.stat().st_size < 200 or not seq_path.is_file():
+            return False
+        data = json.loads(seq_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    ui = data.get("ui") if isinstance(data, dict) else None
+    stored = ""
+    if isinstance(ui, dict) and isinstance(ui.get("vo"), dict):
+        stored = str(ui["vo"].get("sig") or "")
+    if not stored or stored != _export_vo_signature(script, lead):
+        return False
+    try:
+        shutil.copy2(vo, dest)
+    except Exception:
+        return False
+    try:
+        return dest.is_file() and dest.stat().st_size >= 200
+    except OSError:
+        return False
+
+
 def _ass_time(t: float) -> str:
     t = max(0.0, float(t))
     h = int(t // 3600)
@@ -1614,13 +1894,30 @@ def _ass_time(t: float) -> str:
     return f"{h}:{m:02d}:{s:05.2f}"
 
 
+def _ass_bgr(hex_color: str) -> str:
+    h = (hex_color or "ffffff").lstrip("#")
+    if len(h) != 6 or any(c not in "0123456789abcdefABCDEF" for c in h):
+        h = "ffffff"
+    r, g, b = h[0:2], h[2:4], h[4:6]
+    return f"&H{b}{g}{r}&"
+
+
+def _ass_alpha(opacity: float) -> str:
+    try:
+        op = float(opacity)
+    except (TypeError, ValueError):
+        op = 1.0
+    aa = int(round((1.0 - max(0.0, min(1.0, op))) * 255))
+    return f"&H{aa:02X}&"
+
+
 def _ass_color(hex_color: str, opacity: float = 1.0) -> str:
     h = (hex_color or "ffffff").lstrip("#")
     if len(h) != 6 or any(c not in "0123456789abcdefABCDEF" for c in h):
         h = "ffffff"
     r, g, b = h[0:2], h[2:4], h[4:6]
-    aa = int(round((1.0 - max(0.0, min(1.0, opacity))) * 255))
-    return f"&H{aa:02X}{b}{g}{r}&"
+    aa = _ass_alpha(opacity)[2:4]
+    return f"&H{aa}{b}{g}{r}&"
 
 
 def _ass_font_name(kind: str) -> str:
@@ -1698,17 +1995,19 @@ def _texts_to_ass(texts: List[Dict[str, Any]], vw: int = 1280, vh: int = 720) ->
             f"\\an{an}",
             f"\\fn{font}",
             f"\\fs{size}",
-            f"\\c{_ass_color(color, opacity)}",
+            f"\\1c{_ass_bgr(color)}",
+            f"\\1a{_ass_alpha(opacity)}",
             "\\bord2",
             "\\3c&H000000&",
         ]
         highlight = (t.get("highlight") or "").lstrip("#")
         if highlight and len(highlight) == 6:
             try:
-                bop = max(0.1, min(1.0, float(t.get("boxOpacity") if t.get("boxOpacity") is not None else 0.85)))
+                bop = max(0.0, min(1.0, float(t.get("boxOpacity") if t.get("boxOpacity") is not None else 0.85)))
             except (TypeError, ValueError):
                 bop = 0.85
-            tags.append(f"\\3c{_ass_color(highlight, bop)}")
+            tags.append(f"\\3c{_ass_bgr(highlight)}")
+            tags.append(f"\\3a{_ass_alpha(bop)}")
             tags.append("\\bord8")
         override = "{" + "".join(tags) + "}"
         lines.append(

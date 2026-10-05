@@ -9,7 +9,9 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -634,10 +636,12 @@ def _llm_plan(
             ],
         },
     }
-    client = OpenAI(api_key=key, base_url="https://api.x.ai/v1")
+    client = OpenAI(api_key=key, base_url="https://api.x.ai/v1", timeout=45.0)
     resp = client.chat.completions.create(
         model=os.environ.get("XAI_MODEL", "grok-4.6"),
         temperature=0.4,
+        timeout=45.0,
+        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)},
@@ -650,7 +654,10 @@ def _llm_plan(
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?", "", text).strip()
         text = re.sub(r"```$", "", text).strip()
-    data = json.loads(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("bad_json") from exc
     return data
 
 
@@ -793,6 +800,9 @@ def _sanitize_plan(
         filt = str(s.get("filter") or "none").strip().lower()
         if filt not in {"none", "bw", "sepia", "vivid", "cool", "warm"}:
             filt = "none"
+        fit = str(s.get("fit") or "contain").strip().lower()
+        if fit not in {"contain", "cover"}:
+            fit = "contain"
         src_hint = s.get("src") or s.get("url") or s.get("serverSrc") or meta.get("url") or ""
         url = _media_url(clip_name, src_hint)
         if freeze:
@@ -800,6 +810,8 @@ def _sanitize_plan(
         else:
             play = max(0.2, (out_p - in_p) / speed)
         sid = str(s.get("id") or "").strip()[:24]
+        if not sid:
+            sid = uuid.uuid4().hex[:12]
         scenes.append({
             "order": i + 1,
             "id": sid,
@@ -833,6 +845,7 @@ def _sanitize_plan(
             "rotation": int(_safe_float(s.get("rotation"), 0, 0, 359)) % 360,
             "crop": _normalize_crop(s.get("crop")),
             "filter": filt,
+            "fit": fit,
             "freeze": freeze,
             "fadeIn": bool(s.get("fadeIn")),
             "fadeOut": bool(s.get("fadeOut")),
@@ -854,6 +867,9 @@ def _sanitize_plan(
 
 
 SEQUENCE_VERSION = 1
+SHRINK_MIN_SCENES = 4
+SHRINK_RATIO = 0.5
+_save_sequence_lock = threading.Lock()
 _MEDIA_EXT = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
 
 
@@ -1552,6 +1568,16 @@ def save_sequence(
     library: Optional[List[Dict[str, Any]]] = None,
     force: bool = False,
 ) -> Tuple[Dict[str, Any], str]:
+    with _save_sequence_lock:
+        return _save_sequence_locked(raw, folder=folder, library=library, force=force)
+
+
+def _save_sequence_locked(
+    raw: Any,
+    folder: Optional[Path] = None,
+    library: Optional[List[Dict[str, Any]]] = None,
+    force: bool = False,
+) -> Tuple[Dict[str, Any], str]:
     d = _autosave_dir(folder)
     seq_path, bak_path = sequence_paths(d)
     existing = _read_json(seq_path)
@@ -1563,6 +1589,10 @@ def save_sequence(
             return sanitize_sequence(existing, library=library, folder=d), "protected"
         if incoming_rev < disk_rev:
             return sanitize_sequence(existing, library=library, folder=d), "stale"
+        old_n = len(existing.get("scenes") or [])
+        new_n = len(incoming_scenes)
+        if old_n >= SHRINK_MIN_SCENES and new_n < old_n * SHRINK_RATIO:
+            return sanitize_sequence(existing, library=library, folder=d), "shrink"
     seq = sanitize_sequence(raw, library=library, folder=d)
     if not seq.get("scenes") and not force:
         if existing and (existing.get("scenes") or []):
@@ -1596,8 +1626,180 @@ def save_sequence(
     seq["rev"] = disk_rev + 1
     seq["savedAt"] = int(time.time() * 1000)
     seq["version"] = SEQUENCE_VERSION
-    seq_path.write_text(json.dumps(seq, ensure_ascii=False), encoding="utf-8")
+    payload = json.dumps(seq, ensure_ascii=False)
+    tmp = seq_path.with_name(seq_path.name + ".tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    tmp.replace(seq_path)
     return seq, "sequence.json"
+
+
+def _project_slug(name: str) -> str:
+    raw = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return (raw or "proyecto")[:48]
+
+
+def _projects_root() -> Path:
+    d = BASE_DIR / "storage" / "projects"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _projects_index_path() -> Path:
+    return _projects_root() / "index.json"
+
+
+def _project_folder(pid: str) -> Path:
+    safe = Path(str(pid or "")).name
+    return _projects_root() / safe
+
+
+def _clips_from_scenes(scenes: Optional[List[Dict[str, Any]]]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for s in scenes or []:
+        if not isinstance(s, dict):
+            continue
+        name = filename_from_src(
+            s.get("clip") or s.get("src") or s.get("url") or s.get("name") or ""
+        )
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def load_projects_index() -> Dict[str, Any]:
+    path = _projects_index_path()
+    data = _read_json(path) if path.is_file() else None
+    if not isinstance(data, dict):
+        data = {}
+    projects: List[Dict[str, Any]] = []
+    for p in data.get("projects") or []:
+        if not isinstance(p, dict) or not str(p.get("id") or "").strip():
+            continue
+        clips: List[str] = []
+        for c in p.get("clips") or []:
+            name = filename_from_src(c)
+            if name and name not in clips:
+                clips.append(name)
+        try:
+            updated = int(p.get("updatedAt") or 0)
+        except (TypeError, ValueError):
+            updated = 0
+        projects.append({
+            "id": str(p["id"]).strip(),
+            "name": str(p.get("name") or p["id"]).strip() or str(p["id"]).strip(),
+            "updatedAt": updated,
+            "clips": clips,
+        })
+    active = str(data.get("activeId") or "").strip()
+    ids = {p["id"] for p in projects}
+    if projects and active not in ids:
+        active = projects[0]["id"]
+    if not projects:
+        active = ""
+    return {"activeId": active, "projects": projects}
+
+
+def _write_projects_index(idx: Dict[str, Any]) -> None:
+    path = _projects_index_path()
+    path.write_text(json.dumps(idx, ensure_ascii=False), encoding="utf-8")
+
+
+def ensure_project_clip_membership() -> Dict[str, Any]:
+    """Fill each project's clip list from that project's sequence. Does not touch scenes."""
+    idx = load_projects_index()
+    for p in idx["projects"]:
+        folder = _project_folder(p["id"])
+        seq_path = folder / "sequence.json"
+        if not seq_path.is_file():
+            p["clips"] = list(p.get("clips") or [])
+            continue
+        seq, _src = load_sequence(folder)
+        names = _clips_from_scenes(seq.get("scenes") or [])
+        if names:
+            p["clips"] = names
+        else:
+            p["clips"] = list(p.get("clips") or [])
+    _write_projects_index(idx)
+    return idx
+
+
+def create_project(name: str) -> Dict[str, Any]:
+    title = (name or "").strip()
+    if not title:
+        raise ValueError("Pon un nombre al proyecto")
+    idx = ensure_project_clip_membership()
+    slug = _project_slug(title)
+    ids = {p["id"] for p in idx["projects"]}
+    pid = slug
+    n = 2
+    while pid in ids:
+        pid = f"{slug}-{n}"
+        n += 1
+    folder = _project_folder(pid)
+    folder.mkdir(parents=True, exist_ok=True)
+    seq, _src = save_sequence(
+        {"title": title, "scenes": []},
+        folder=folder,
+        force=True,
+    )
+    project = {
+        "id": pid,
+        "name": title[:80],
+        "updatedAt": int(time.time() * 1000),
+        "clips": [],
+    }
+    idx["projects"].append(project)
+    idx["activeId"] = pid
+    _write_projects_index(idx)
+    return {"ok": True, "activeId": pid, "project": project, "sequence": seq}
+
+
+def active_project_clip_names() -> List[str]:
+    idx = load_projects_index()
+    aid = idx.get("activeId") or ""
+    for p in idx["projects"]:
+        if p["id"] == aid:
+            return list(p.get("clips") or [])
+    return []
+
+
+def attach_clip_to_active_project(name: str) -> List[str]:
+    clip = filename_from_src(name)
+    if not clip:
+        return []
+    idx = load_projects_index()
+    if not idx["projects"]:
+        return []
+    aid = idx.get("activeId") or idx["projects"][0]["id"]
+    for p in idx["projects"]:
+        if p["id"] != aid:
+            continue
+        clips = list(p.get("clips") or [])
+        if clip not in clips:
+            clips.append(clip)
+        p["clips"] = clips
+        p["updatedAt"] = int(time.time() * 1000)
+        idx["activeId"] = aid
+        _write_projects_index(idx)
+        return clips
+    return []
+
+
+def switch_project(pid: str) -> Dict[str, Any]:
+    idx = load_projects_index()
+    want = str(pid or "").strip()
+    match = next((p for p in idx["projects"] if p["id"] == want), None)
+    if not match:
+        return {"ok": False, "activeId": idx.get("activeId") or ""}
+    idx["activeId"] = match["id"]
+    for p in idx["projects"]:
+        if p["id"] == match["id"]:
+            p["updatedAt"] = int(time.time() * 1000)
+    _write_projects_index(idx)
+    return {"ok": True, "activeId": match["id"]}
 
 
 def plan_video(
@@ -1621,20 +1823,25 @@ def plan_video(
         )
 
     used_ai = False
+    llm_error: Optional[BaseException] = None
     try:
         raw = _llm_plan(prompt, fmt, target_seconds, library, language)
         used_ai = True
     except Exception as e:
+        llm_error = e
         print(f"Video Creation LLM fallback: {e}")
         raw = _heuristic_plan(prompt, fmt, target_seconds, library)
 
     plan = _sanitize_plan(raw, library, fmt)
     plan["ai"] = used_ai
     if not used_ai:
-        plan["summary"] = (
-            plan.get("summary")
-            or "Plan local (sin XAI_API_KEY). Pon la clave en .env para un guion estilo InVideo."
-        )
+        if isinstance(llm_error, TimeoutError):
+            plan["summary"] = "El director no respondió. Plan local con tus clips."
+        else:
+            plan["summary"] = (
+                plan.get("summary")
+                or "Plan local (sin XAI_API_KEY). Pon la clave en .env para un guion estilo InVideo."
+            )
     return plan
 
 
@@ -2225,7 +2432,7 @@ def chat_edit_plan(
         return out
 
     hist = []
-    for h in (history or [])[-16]:
+    for h in (history or [])[-16:]:
         if not isinstance(h, dict):
             continue
         role = (h.get("role") or "").strip()
@@ -2322,6 +2529,7 @@ def chat_edit_plan(
             temperature=0.55,
             messages=messages,
             timeout=45.0,
+            response_format={"type": "json_object"},
         )
     except Exception as e:
         fallback = _global_director_edit(msg, current, library)
@@ -2444,6 +2652,7 @@ def grok_caption_cues(
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             timeout=22.0,
+            response_format={"type": "json_object"},
         )
         text = ((resp.choices or [None])[0].message.content or "").strip() if resp.choices else ""
         if text.startswith("```"):

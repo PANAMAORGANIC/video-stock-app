@@ -2,17 +2,19 @@
 Clearview — personal footage NLE (Library → Edit → Assemble).
 """
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from pathlib import Path
 from urllib.parse import unquote
 import asyncio
 import json
+import re
 import shutil
+import threading
 import uuid
 import uvicorn
 
@@ -46,6 +48,9 @@ from video_tools import (
     unique_path,
     strip_captions,
     publish_edited_clip,
+    replace_clip_audio,
+    EXPORTS_TMP,
+    MIC_AUDIO_EXT,
     delogo_region,
     load_clip_peaks,
     move_peaks_sidecar,
@@ -59,6 +64,7 @@ from video_tools import (
     proxy_needed,
     proxy_path,
     proxy_is_fresh,
+    drop_incomplete_proxy,
     move_clip_proxy,
     delete_clip_proxy,
     PROXIES_DIR,
@@ -84,6 +90,11 @@ from video_create import (
     resolve_vo_source,
     SEQUENCE_VO_URL,
     SEQUENCE_MUSIC_URL,
+    attach_clip_to_active_project,
+    create_project,
+    load_projects_index,
+    switch_project,
+    _incoming_scenes_raw,
 )
 from eleven_audio import (
     eleven_key,
@@ -110,7 +121,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:8000", "http://127.0.0.1:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -434,7 +445,7 @@ async def search_footage(req: SearchRequest):
         plat = v.get("platform") or "youtube"
         if plat == "youtube" and v.get("video_id"):
             try:
-                transcript = get_transcript_with_timestamps(v["video_id"])
+                transcript = await asyncio.to_thread(get_transcript_with_timestamps, v["video_id"])
                 if transcript:
                     segments = suggest_segments(req.query, transcript)
             except Exception as e:
@@ -785,10 +796,15 @@ async def clip_poster(name: str = "", t: float = 0.0, make: int = 0):
     return FileResponse(str(made), media_type="image/jpeg")
 
 
+_proxy_jobs: set = set()
+_proxy_jobs_lock = threading.Lock()
+
+
 def _proxy_info(path: Path) -> dict:
     dest = proxy_path(path.name)
     if not proxy_needed(path):
         return {"ready": False, "skipped": True, "url": None, "name": path.name}
+    drop_incomplete_proxy(path, dest)
     if proxy_is_fresh(path, dest):
         return {"ready": True, "skipped": False, "url": f"/proxies/{path.name}", "name": path.name}
     return {"ready": False, "skipped": False, "url": None, "name": path.name}
@@ -798,18 +814,27 @@ def _proxy_info(path: Path) -> dict:
 async def clip_proxy_status(name: str = ""):
     """Preview proxy status. Original stays in storage/clips; this is optional 540p."""
     path = _resolve_named_media(name)
-    return _proxy_info(path)
+    return await asyncio.to_thread(_proxy_info, path)
 
 
 @app.post("/api/clips/proxy")
 async def clip_proxy_make(background_tasks: BackgroundTasks, name: str = ""):
     path = _resolve_named_media(name)
-    info = _proxy_info(path)
+    info = await asyncio.to_thread(_proxy_info, path)
     if info["skipped"] or info["ready"]:
         return info
+    with _proxy_jobs_lock:
+        if path.name in _proxy_jobs:
+            info["started"] = True
+            return info
+        _proxy_jobs.add(path.name)
 
     def _job(p: Path) -> None:
-        ensure_clip_proxy(p)
+        try:
+            ensure_clip_proxy(p)
+        finally:
+            with _proxy_jobs_lock:
+                _proxy_jobs.discard(p.name)
 
     background_tasks.add_task(_job, path)
     info["started"] = True
@@ -904,6 +929,246 @@ async def rename_clip(req: ClipNameRequest):
     move_poster_sidecars(src, dest)
     move_clip_proxy(src, dest)
     return {"name": dest.name, "url": f"/clips/{dest.name}", "title": dest.stem, "old_name": src.name}
+
+
+class PublishClipRequest(BaseModel):
+    src: str
+    start: float = 0
+    end: float = 0
+    output_name: str = ""
+    extras: Optional[dict] = None
+
+
+SCENE_EDIT_PROPS = {
+    "inPoint",
+    "outPoint",
+    "speed",
+    "volume",
+    "muted",
+    "rotation",
+    "filter",
+    "crop",
+    "grade",
+    "freeze",
+    "fadeIn",
+    "fadeOut",
+    "text",
+    "textPosition",
+    "fit",
+}
+
+
+@app.post("/api/clips/publish")
+async def publish_clip(req: PublishClipRequest):
+    """Bake one edited span into a new Library clip. Does not write the Sequence."""
+    if not check_ffmpeg():
+        raise HTTPException(status_code=500, detail="FFmpeg no está disponible")
+    path = _resolve_media_src(req.src)
+    ok, message, dest = await asyncio.to_thread(
+        publish_edited_clip,
+        path,
+        float(req.start or 0),
+        float(req.end or 0),
+        req.output_name or path.stem,
+        req.extras or {},
+    )
+    if not ok or not dest:
+        raise HTTPException(status_code=500, detail=message or "No se pudo publicar")
+    attach_clip_to_active_project(dest.name)
+    duration = probe_duration(dest)
+    return {
+        "ok": True,
+        "message": message,
+        "filename": dest.name,
+        "path": f"/clips/{dest.name}",
+        "url": f"/clips/{dest.name}",
+        "duration": round(duration, 2) if duration else None,
+    }
+
+
+def _parse_offset_ms(raw: Optional[str]) -> int:
+    if raw is None or str(raw).strip() == "":
+        raise HTTPException(status_code=400, detail="Desfase (ms) es obligatorio")
+    text = str(raw).strip()
+    if len(text) > 12 or not re.fullmatch(r"[+-]?\d+", text):
+        raise HTTPException(status_code=400, detail="Desfase (ms) tiene que ser un entero")
+    value = int(text)
+    if value < -12 * 60 * 60 * 1000 or value > 12 * 60 * 60 * 1000:
+        raise HTTPException(status_code=400, detail="Desfase (ms) fuera de rango")
+    return value
+
+
+def _library_clip_file(clip_id: str) -> Path:
+    safe = Path(clip_id or "").name
+    if not safe or safe in {".", ".."} or Path(safe).suffix.lower() not in ALLOWED_MEDIA_EXT:
+        raise HTTPException(status_code=404, detail=f"No se encuentra: {safe or clip_id}")
+    path = (CLIPS_DIR / safe).resolve()
+    if path.parent != CLIPS_DIR.resolve() or not path.is_file():
+        raise HTTPException(status_code=404, detail=f"No se encuentra: {safe}")
+    return path
+
+
+async def _stash_mic_upload(file: UploadFile) -> Path:
+    original = file.filename or "mic.wav"
+    ext = Path(original).suffix.lower()
+    if ext not in MIC_AUDIO_EXT:
+        raise HTTPException(status_code=400, detail="Usa CAF, WAV, MP3 o M4A")
+    tmp = TEMP_DIR / f"mic_{uuid.uuid4().hex[:10]}{ext}"
+    try:
+        with tmp.open("wb") as out:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"No se pudo guardar el audio: {e}")
+    finally:
+        await file.close()
+    if not tmp.is_file() or tmp.stat().st_size < 32:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="El audio de micrófono está vacío")
+    return tmp
+
+
+def _resolve_mic_audio_path(raw: str) -> Path:
+    """Basename under storage/uploads. Never the bed track in autosave."""
+    text = (raw or "").strip().replace("\\", "/")
+    if not text:
+        raise HTTPException(status_code=400, detail="Elige el audio de micrófono o una ruta en uploads.")
+    low = text.lower()
+    if "music.mp3" in low or "/autosave/" in low or low.startswith("autosave/"):
+        raise HTTPException(status_code=400, detail="Ese archivo no es el audio de micrófono")
+    name = Path(text).name
+    if not name or name in {".", ".."} or Path(name).suffix.lower() not in MIC_AUDIO_EXT:
+        raise HTTPException(status_code=400, detail="Usa CAF, WAV, MP3 o M4A")
+    path = (UPLOADS_DIR / name).resolve()
+    try:
+        uploads_root = UPLOADS_DIR.resolve()
+        bed = sequence_music_path().resolve()
+    except OSError:
+        raise HTTPException(status_code=400, detail="La ruta tiene que estar en uploads")
+    if path == bed or path.parent != uploads_root:
+        raise HTTPException(status_code=400, detail="La ruta tiene que estar en uploads")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="No está ese audio en uploads")
+    return path
+
+
+async def _mic_source(audio: Optional[UploadFile], audio_path: str) -> Tuple[Path, Optional[Path]]:
+    """Return (readable audio, temp file to delete). Server path is not copied."""
+    if audio is not None and (audio.filename or "").strip():
+        tmp = await _stash_mic_upload(audio)
+        return tmp, tmp
+    if (audio_path or "").strip():
+        return _resolve_mic_audio_path(audio_path), None
+    raise HTTPException(status_code=400, detail="Elige el audio de micrófono o una ruta en uploads.")
+
+
+async def _run_replace_audio(
+    clip_id: str,
+    offset_raw: Optional[str],
+    audio: Optional[UploadFile],
+    label: str,
+    dest_dir: Path,
+    audio_path: str = "",
+):
+    offset = _parse_offset_ms(offset_raw)
+    video = _library_clip_file(clip_id)
+    src_audio, tmp = await _mic_source(audio, audio_path)
+    try:
+        ok, message, dest = await asyncio.to_thread(
+            replace_clip_audio,
+            video,
+            src_audio,
+            offset,
+            (label or "").strip(),
+            dest_dir,
+        )
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+    if not ok or not dest:
+        raise HTTPException(status_code=500, detail=message or "No se pudo reemplazar el audio")
+    try:
+        if dest.resolve() == video.resolve():
+            raise HTTPException(status_code=500, detail="No se puede sobrescribir el original")
+    except HTTPException:
+        raise
+    except OSError:
+        pass
+    duration = probe_duration(dest)
+    return video, dest, offset, duration
+
+
+@app.post("/api/clips/replace-audio")
+async def replace_clip_audio_route(
+    clip_id: str = Form(""),
+    offset_ms: Optional[str] = Form(None),
+    label: str = Form(""),
+    audio_path: str = Form(""),
+    audio: Optional[UploadFile] = File(None),
+):
+    """Mux a mic recording onto a Library video. New clip only. Sequence stays put.
+
+    audio is an uploaded file. audio_path is a name already under storage/uploads
+    (the server reads it; the browser does not re-upload the bytes).
+    """
+    if not check_ffmpeg():
+        raise HTTPException(status_code=500, detail="FFmpeg no está disponible")
+    video, dest, offset, duration = await _run_replace_audio(
+        clip_id, offset_ms, audio, label, CLIPS_DIR, audio_path,
+    )
+    attach_clip_to_active_project(dest.name)
+    return {
+        "ok": True,
+        "filename": dest.name,
+        "path": f"/clips/{dest.name}",
+        "url": f"/clips/{dest.name}",
+        "name": dest.name,
+        "title": dest.stem,
+        "duration": round(duration, 2) if duration else None,
+        "offset_ms": offset,
+        "source": video.name,
+        "preview": False,
+    }
+
+
+@app.post("/api/clips/replace-audio/preview")
+async def replace_clip_audio_preview(
+    clip_id: str = Form(""),
+    offset_ms: Optional[str] = Form(None),
+    label: str = Form(""),
+    audio_path: str = Form(""),
+    audio: Optional[UploadFile] = File(None),
+):
+    """Same mux as replace-audio, written only under storage/exports/tmp."""
+    if not check_ffmpeg():
+        raise HTTPException(status_code=500, detail="FFmpeg no está disponible")
+    EXPORTS_TMP.mkdir(parents=True, exist_ok=True)
+    _video, dest, offset, duration = await _run_replace_audio(
+        clip_id, offset_ms, audio, label or "preview_mic", EXPORTS_TMP, audio_path,
+    )
+    return {
+        "ok": True,
+        "preview": True,
+        "filename": dest.name,
+        "url": f"/api/clips/replace-audio/preview-file?name={dest.name}",
+        "duration": round(duration, 2) if duration else None,
+        "offset_ms": offset,
+    }
+
+
+@app.get("/api/clips/replace-audio/preview-file")
+async def replace_clip_audio_preview_file(name: str = ""):
+    safe = Path(name or "").name
+    if not safe or Path(safe).suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="Sin preview")
+    path = (EXPORTS_TMP / safe).resolve()
+    if path.parent != EXPORTS_TMP.resolve() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Sin preview")
+    return FileResponse(str(path), media_type="video/mp4", filename=safe)
 
 
 @app.post("/api/clips/delete")
@@ -1298,13 +1563,84 @@ async def delete_sequence_music():
     return {"ok": True, "url": SEQUENCE_MUSIC_URL, "name": "", "kind": "audio"}
 
 
+@app.post("/api/sequence/scene")
+async def patch_sequence_scene(payload: dict):
+    """Write one scene's edit props. Rejects a whole scenes[] document."""
+    if not isinstance(payload, dict) or "scenes" in payload:
+        raise HTTPException(status_code=400, detail="Edit no envía el documento completo")
+    sid = str(payload.get("id") or "").strip()
+    props = payload.get("props")
+    if not sid:
+        raise HTTPException(status_code=400, detail="Falta la escena")
+    if not isinstance(props, dict) or not props:
+        raise HTTPException(status_code=400, detail="Faltan propiedades")
+    unknown = [k for k in props.keys() if k not in SCENE_EDIT_PROPS]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Prop no permitida: {unknown[0]}")
+    seq, _source = load_sequence()
+    scenes = [dict(s) for s in (seq.get("scenes") or []) if isinstance(s, dict)]
+    found = None
+    for s in scenes:
+        if str(s.get("id") or "") == sid:
+            found = s
+            break
+    if found is None:
+        raise HTTPException(status_code=404, detail="No hay esa escena")
+    found.update(props)
+    seq["scenes"] = scenes
+    saved, src = save_sequence(seq, force=False)
+    if src == "stale":
+        return {
+            "ok": False,
+            "source": src,
+            "sequence": saved,
+            "rev": saved.get("rev") or 0,
+            "stale": True,
+        }
+    return {
+        "ok": src not in ("stale", "protected"),
+        "source": src,
+        "sequence": saved,
+        "rev": saved.get("rev") or 0,
+    }
+
+
+class NewProjectRequest(BaseModel):
+    name: str = ""
+
+
+class SwitchProjectRequest(BaseModel):
+    id: str = ""
+
+
+@app.get("/api/projects")
+async def get_projects():
+    return load_projects_index()
+
+
+@app.post("/api/projects/new")
+async def api_new_project(req: NewProjectRequest):
+    try:
+        return create_project(req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/projects/switch")
+async def api_switch_project(req: SwitchProjectRequest):
+    out = switch_project(req.id)
+    if not out.get("ok"):
+        raise HTTPException(status_code=404, detail="No hay ese proyecto")
+    return out
+
+
 @app.post("/api/sequence")
 async def post_sequence(payload: dict):
     force = bool(payload.get("force"))
     raw = payload.get("sequence") if isinstance(payload.get("sequence"), dict) else payload
     seq, source = save_sequence(raw, force=force)
     body = {
-        "ok": source not in ("stale", "protected"),
+        "ok": source not in ("stale", "protected", "shrink"),
         "source": source,
         "scenes": len(seq.get("scenes") or []),
         "sequence": seq,
@@ -1314,6 +1650,10 @@ async def post_sequence(payload: dict):
         body["stale"] = True
     if source == "protected":
         body["skipped"] = "empty"
+    if source == "shrink":
+        body["shrink"] = True
+        body["from"] = len(seq.get("scenes") or [])
+        body["to"] = len(_incoming_scenes_raw(raw))
     return body
 
 
@@ -1820,4 +2160,4 @@ async def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
