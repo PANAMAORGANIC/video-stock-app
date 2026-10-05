@@ -2607,6 +2607,72 @@ class PreviewPerfTests(unittest.TestCase):
             self.assertEqual(body.get("url"), "/proxies/" + clip.name)
             self.assertTrue(dest.is_file())
 
+    def test_silent_proxy_of_a_clip_with_audio_is_deleted(self):
+        if not check_ffmpeg():
+            self.skipTest("ffmpeg not installed")
+        ff = ffmpeg_bin()
+        import os
+        from video_tools import _run, PROXIES_DIR, proxy_is_fresh, drop_incomplete_proxy, ensure_clip_proxy
+        PROXIES_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as d:
+            clip = Path(d) / "mic_scene.mp4"
+            silent = Path(d) / "silent_proxy.mp4"
+            heard = Path(d) / "heard_proxy.mp4"
+            made = _run([
+                ff, "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=2:r=15",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=48000",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+                str(clip),
+            ])
+            if made.returncode != 0 or not clip.is_file():
+                self.skipTest("could not mux clip with audio")
+            if _run([
+                ff, "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=red:s=160x90:d=2:r=15",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(silent),
+            ]).returncode != 0:
+                self.skipTest("could not mux silent proxy")
+            if _run([
+                ff, "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(clip), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "96k", str(heard),
+            ]).returncode != 0:
+                self.skipTest("could not mux proxy with audio")
+            dest = PROXIES_DIR / clip.name
+            cache = PROXIES_DIR / (clip.name + ".duration.json")
+            cmds = []
+
+            def boom(cmd, **kwargs):
+                self.assertNotIn("timeout", kwargs)
+                cmds.append(list(cmd))
+                raise subprocess.TimeoutExpired(cmd, 1)
+
+            try:
+                dest.write_bytes(silent.read_bytes())
+                now = time.time() + 30
+                os.utime(dest, (now, now))
+                self.assertGreater(dest.stat().st_size, 2000)
+                self.assertFalse(proxy_is_fresh(clip, dest))
+                self.assertTrue(drop_incomplete_proxy(clip, dest))
+                self.assertFalse(dest.exists())
+                self.assertTrue(clip.is_file())
+                dest.write_bytes(heard.read_bytes())
+                os.utime(dest, (now, now))
+                self.assertTrue(proxy_is_fresh(clip, dest))
+                self.assertFalse(drop_incomplete_proxy(clip, dest))
+                dest.unlink()
+                with patch("video_tools.proxy_needed", return_value=True):
+                    with patch("video_tools.subprocess.run", side_effect=boom):
+                        status, out = ensure_clip_proxy(clip)
+                self.assertEqual(status, "failed")
+                self.assertIsNone(out)
+                self.assertTrue(cmds)
+                self.assertFalse(any("-an" in cmd for cmd in cmds))
+            finally:
+                dest.unlink(missing_ok=True)
+                cache.unlink(missing_ok=True)
+
 
 class ExportPathTests(unittest.TestCase):
     def test_normalize_segment_speed_keeps_out_duration(self):
@@ -3357,6 +3423,9 @@ class FrontendWriterContractTests(unittest.TestCase):
         self.assertIn('fetch("/api/clips/replace-audio"', mic)
         self.assertIn('fd.append("audio_path", serverPath)', mic)
         self.assertIn("syncPreview(currentTime, false)", mic)
+        self.assertIn("s.muted = false", mic)
+        self.assertIn("Se oye el micrófono.", mic)
+        self.assertIn('el.removeAttribute("muted")', src)
         self.assertIn("puede tardar", mic)
         self.assertNotIn('fetch("/uploads/', mic)
         self.assertNotIn(".blob()", mic)

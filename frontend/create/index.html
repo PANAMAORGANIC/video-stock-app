@@ -1429,6 +1429,13 @@
       var note = $("previewPosterNote");
       if (note) note.classList.remove("is-on");
     }
+    function applyPreviewMute(el, s) {
+      if (!el) return;
+      var silent = !!(s && s.muted);
+      el.muted = silent;
+      if (silent) el.setAttribute("muted", "");
+      else el.removeAttribute("muted");
+    }
     function syncPreview(t, play) {
       var s = sceneAt(t);
       var front = previewLive();
@@ -1451,7 +1458,7 @@
       var url = mediaPreviewUrl(s.clip);
       var rate = (s.speed || 1) * (assembleShuttle > 0 ? assembleShuttle : 1);
       function paintLive(el) {
-        el.muted = !!s.muted;
+        applyPreviewMute(el, s);
         el.playbackRate = rate;
         applyScenePreviewFx(s, el);
         if (s.freeze) {
@@ -1481,7 +1488,7 @@
       var back = previewHidden();
       var gen = ++previewSwapGen;
       back.dataset.clip = s.clip;
-      back.muted = !!s.muted;
+      applyPreviewMute(back, s);
       back.playbackRate = rate;
       applyScenePreviewFx(s, back);
       function reveal() {
@@ -1698,10 +1705,11 @@
         s.url = s.src;
         delete previewProxy[name];
         delete proxyKick[name];
+        s.muted = false;
         if (typeof library !== "undefined" && library && !library.some(function (c) { return c.name === name; })) {
           library.push({ name: name, title: data.title || name, duration: data.duration || 0, url: s.src });
         }
-        if (msg) msg.textContent = "Clip nuevo en esta escena: " + name;
+        if (msg) msg.textContent = "Clip nuevo en esta escena: " + name + ". Se oye el micrófono.";
         renderAll();
         lockSave();
         syncPreview(currentTime, false);

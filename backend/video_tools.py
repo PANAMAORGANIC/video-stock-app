@@ -1009,26 +1009,67 @@ def _proxy_duration_cache(src: Path) -> Path:
     return PROXIES_DIR / (Path(src).name + ".duration.json")
 
 
-def cached_source_duration(src: Path) -> Optional[float]:
-    """Source duration, remembered beside the proxy so a 6 GB HEVC is probed once."""
+def _av_from_info(info: dict) -> Tuple[Optional[float], Optional[bool]]:
+    if not info:
+        return None, None
+    try:
+        dur = float((info.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    audio = any(s.get("codec_type") == "audio" for s in (info.get("streams") or []))
+    return (dur if dur > 0 else None), audio
+
+
+def cached_source_av(src: Path) -> Tuple[Optional[float], Optional[bool]]:
+    """Duration and whether the source has audio. Probed once for a large HEVC."""
     src = Path(src)
     cache = _proxy_duration_cache(src)
+    cached_dur = None
     try:
         if cache.is_file() and cache.stat().st_mtime >= src.stat().st_mtime:
-            dur = float(json.loads(cache.read_text(encoding="utf-8")).get("duration") or 0)
-            if dur > 0:
-                return dur
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            cached_dur = float(data.get("duration") or 0) or None
+            if cached_dur and "audio" in data:
+                return cached_dur, bool(data["audio"])
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        pass
-    dur = probe_duration(src, timeout=300)
+        cached_dur = None
+    info = get_video_info(src, timeout=300)
+    dur, audio = _av_from_info(info)
     if not dur:
-        return None
+        dur = cached_dur or probe_duration(src, timeout=300)
+    if not dur:
+        return None, None
+    payload = {"duration": dur}
+    if info:
+        payload["audio"] = bool(audio)
     try:
         PROXIES_DIR.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps({"duration": dur}), encoding="utf-8")
+        cache.write_text(json.dumps(payload), encoding="utf-8")
     except OSError:
         pass
+    return dur, (bool(audio) if info else None)
+
+
+def cached_source_duration(src: Path) -> Optional[float]:
+    """Source duration, remembered beside the proxy so a 6 GB HEVC is probed once."""
+    dur, _audio = cached_source_av(src)
     return dur
+
+
+def file_has_audio(path: Path, timeout: float = 20) -> Optional[bool]:
+    """True/False when ffprobe reads the file. None when the probe fails."""
+    info = get_video_info(path, timeout=timeout)
+    if not info:
+        return None
+    return any(s.get("codec_type") == "audio" for s in (info.get("streams") or []))
+
+
+def proxy_audio_ok(src: Path, dest: Path) -> bool:
+    """A clip with audio needs a proxy that still has an audio stream. Silent -an is not ready."""
+    _dur, src_audio = cached_source_av(src)
+    if src_audio is not True:
+        return True
+    return file_has_audio(dest) is True
 
 
 def proxy_covers_source(src: Path, dest: Path) -> bool:
@@ -1051,7 +1092,7 @@ def proxy_is_fresh(src: Path, dest: Path) -> bool:
             return False
     except OSError:
         return False
-    return proxy_covers_source(src, dest)
+    return proxy_covers_source(src, dest) and proxy_audio_ok(src, dest)
 
 
 def drop_incomplete_proxy(src: Path, dest: Path) -> bool:
@@ -1068,7 +1109,7 @@ def drop_incomplete_proxy(src: Path, dest: Path) -> bool:
         return False
     if not cached_source_duration(src):
         return False
-    if proxy_covers_source(src, dest):
+    if proxy_covers_source(src, dest) and proxy_audio_ok(src, dest):
         return False
     try:
         dest.unlink()
@@ -1099,6 +1140,7 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
             return "ready", dest
         drop_incomplete_proxy(path, dest)
         tmp = dest.with_name(dest.name + ".tmp.mp4")
+        _src_dur, src_audio = cached_source_av(path)
         tries = [
             [
                 ff, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
@@ -1109,7 +1151,10 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                 "-movflags", "+faststart",
                 str(tmp),
             ],
-            [
+        ]
+        # -an is only for a clip that has no audio. A mic take must keep its track.
+        if src_audio is False:
+            tries.append([
                 ff, "-y", "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-i", str(path),
                 "-vf", "scale=-2:480",
@@ -1117,8 +1162,7 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                 "-an",
                 "-movflags", "+faststart",
                 str(tmp),
-            ],
-        ]
+            ])
         def _drop_tmp() -> None:
             try:
                 tmp.unlink(missing_ok=True)
@@ -1138,6 +1182,7 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                     and tmp.is_file()
                     and tmp.stat().st_size > 2000
                     and proxy_covers_source(path, tmp)
+                    and proxy_audio_ok(path, tmp)
                 ):
                     try:
                         if dest.exists():
@@ -1149,7 +1194,7 @@ def ensure_clip_proxy(path: Path) -> Tuple[str, Optional[Path]]:
                         except Exception:
                             _drop_tmp()
                             return "failed", None
-                    if dest.is_file() and proxy_covers_source(path, dest):
+                    if dest.is_file() and proxy_covers_source(path, dest) and proxy_audio_ok(path, dest):
                         return "ready", dest
                     return "failed", None
                 _drop_tmp()
